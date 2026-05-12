@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ContentFlow — Automated Social Integration</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+  <!-- Sidebar Navigation -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon"><i class="fa-solid fa-bolt-lightning"></i></div>
+      <span class="logo-text">ContentFlow</span>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-page="dashboard">
+        <i class="fa-solid fa-gauge-high"></i>
+        <span>Dashboard</span>
+      </a>
+      <a href="#" class="nav-item" data-page="pipeline">
+        <i class="fa-solid fa-diagram-project"></i>
+        <span>Pipeline</span>
+      </a>
+      <a href="#" class="nav-item" data-page="scheduler">
+        <i class="fa-solid fa-calendar-days"></i>
+        <span>Scheduler</span>
+      </a>
+      <a href="#" class="nav-item" data-page="history">
+        <i class="fa-solid fa-clock-rotate-left"></i>
+        <span>History</span>
+      </a>
+      <a href="#" class="nav-item" data-page="settings">
+        <i class="fa-solid fa-gear"></i>
+        <span>Settings</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-status">
+      <div class="status-row">
+        <span class="status-dot" id="dot-claude"></span>
+        <span>Claude API</span>
+        <span class="status-label" id="lbl-claude">–</span>
+      </div>
+      <div class="status-row">
+        <span class="status-dot" id="dot-arvo"></span>
+        <span>Arvo</span>
+        <span class="status-label" id="lbl-arvo">–</span>
+      </div>
+      <div class="status-row">
+        <span class="status-dot" id="dot-blotato"></span>
+        <span>Blotato</span>
+        <span class="status-label" id="lbl-blotato">–</span>
+      </div>
+      <div class="status-row">
+        <span class="status-dot" id="dot-fb"></span>
+        <span>Facebook</span>
+        <span class="status-label" id="lbl-fb">–</span>
+      </div>
+      <div class="status-row">
+        <span class="status-dot" id="dot-ig"></span>
+        <span>Instagram</span>
+        <span class="status-label" id="lbl-ig">–</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Mobile top bar -->
+  <header class="mobile-header">
+    <button id="sidebar-toggle"><i class="fa-solid fa-bars"></i></button>
+    <span class="logo-text">ContentFlow</span>
+  </header>
+
+  <!-- Main content area -->
+  <main class="main-content" id="main-content">
+
+    <!-- ========== DASHBOARD PAGE ========== -->
+    <section class="page active" id="page-dashboard">
+      <div class="page-header">
+        <h1>Dashboard</h1>
+        <p>Overview of your content automation pipeline</p>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon bg-blue"><i class="fa-solid fa-play"></i></div>
+          <div class="stat-info">
+            <div class="stat-value" id="stat-total">0</div>
+            <div class="stat-label">Total Runs</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon bg-green"><i class="fa-solid fa-check-circle"></i></div>
+          <div class="stat-info">
+            <div class="stat-value" id="stat-posted">0</div>
+            <div class="stat-label">Posted</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon bg-amber"><i class="fa-solid fa-hourglass-half"></i></div>
+          <div class="stat-info">
+            <div class="stat-value" id="stat-pending">0</div>
+            <div class="stat-label">Pending</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon bg-red"><i class="fa-solid fa-circle-exclamation"></i></div>
+          <div class="stat-info">
+            <div class="stat-value" id="stat-failed">0</div>
+            <div class="stat-label">Failed</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pipeline Flow Diagram -->
+      <div class="card flow-card">
+        <div class="card-header">
+          <h2><i class="fa-solid fa-diagram-project"></i> Automation Pipeline</h2>
+          <span class="badge badge-blue">Long-Term Integration</span>
+        </div>
+        <div class="flow-diagram">
+          <div class="flow-node" id="flow-website">
+            <div class="flow-node-icon"><i class="fa-solid fa-globe"></i></div>
+            <div class="flow-node-label">Website</div>
+            <div class="flow-node-sub">Content Source</div>
+          </div>
+          <div class="flow-arrow"><i class="fa-solid fa-arrow-right"></i></div>
+          <div class="flow-node" id="flow-claude">
+            <div class="flow-node-icon"><i class="fa-solid fa-brain"></i></div>
+            <div class="flow-node-label">Claude AI</div>
+            <div class="flow-node-sub">Rewrite & Optimize</div>
+          </div>
+          <div class="flow-arrow"><i class="fa-solid fa-arrow-right"></i></div>
+          <div class="flow-node" id="flow-arvo">
+            <div class="flow-node-icon"><i class="fa-solid fa-film"></i></div>
+            <div class="flow-node-label">Arvo</div>
+            <div class="flow-node-sub">Video Generation</div>
+          </div>
+          <div class="flow-arrow"><i class="fa-solid fa-arrow-right"></i></div>
+          <div class="flow-node" id="flow-blotato">
+            <div class="flow-node-icon"><i class="fa-solid fa-rocket"></i></div>
+            <div class="flow-node-label">Blotato</div>
+            <div class="flow-node-sub">Format & Schedule</div>
+          </div>
+          <div class="flow-arrow"><i class="fa-solid fa-arrow-right"></i></div>
+          <div class="flow-node flow-split">
+            <div class="split-row">
+              <div class="flow-node-icon sm"><i class="fa-brands fa-facebook"></i></div>
+              <span>Facebook</span>
+            </div>
+            <div class="split-row">
+              <div class="flow-node-icon sm"><i class="fa-brands fa-instagram"></i></div>
+              <span>Instagram</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="card">
+        <div class="card-header">
+          <h2><i class="fa-solid fa-bolt"></i> Quick Actions</h2>
+        </div>
+        <div class="quick-actions">
+          <button class="btn btn-primary" onclick="navigateTo('pipeline')">
+            <i class="fa-solid fa-play"></i> Run Pipeline Now
+          </button>
+          <button class="btn btn-secondary" onclick="navigateTo('scheduler')">
+            <i class="fa-solid fa-calendar-plus"></i> Schedule Post
+          </button>
+          <button class="btn btn-outline" onclick="navigateTo('settings')">
+            <i class="fa-solid fa-plug"></i> Configure APIs
+          </button>
+        </div>
+      </div>
+
+      <!-- Recent Runs -->
+      <div class="card">
+        <div class="card-header">
+          <h2><i class="fa-solid fa-clock-rotate-left"></i> Recent Pipeline Runs</h2>
+          <button class="btn btn-sm btn-outline" onclick="navigateTo('history')">View All</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="recent-runs-table">
+            <thead>
+              <tr>
+                <th>Source URL</th>
+                <th>Status</th>
+                <th>Platforms</th>
+                <th>Scheduled</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="recent-runs-body">
+              <tr class="empty-row">
+                <td colspan="5"><i class="fa-solid fa-inbox"></i> No runs yet. Start your first pipeline!</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== PIPELINE PAGE ========== -->
+    <section class="page" id="page-pipeline">
+      <div class="page-header">
+        <h1>Content Pipeline</h1>
+        <p>Scrape → Claude → Arvo → Blotato → Post</p>
+      </div>
+
+      <div class="pipeline-layout">
+        <!-- Step 1: Source -->
+        <div class="pipeline-step card" id="step-1">
+          <div class="step-header">
+            <div class="step-num">1</div>
+            <div>
+              <h3>Content Source</h3>
+              <p>Enter the website URL to scrape content from</p>
+            </div>
+            <div class="step-icon"><i class="fa-solid fa-globe"></i></div>
+          </div>
+          <div class="step-body">
+            <label class="form-label">Website URL</label>
+            <input type="url" id="source-url" class="form-input" placeholder="https://example.com/blog/post" />
+            <label class="form-label mt">Content Type</label>
+            <select id="content-type" class="form-input">
+              <option value="article">Blog Article / News</option>
+              <option value="product">Product Page</option>
+              <option value="social">Social Content</option>
+              <option value="custom">Custom</option>
+            </select>
+            <label class="form-label mt">Manual Content Override <span class="optional">(optional)</span></label>
+            <textarea id="manual-content" class="form-textarea" rows="4" placeholder="Or paste your content here directly..."></textarea>
+          </div>
+        </div>
+
+        <!-- Step 2: Claude -->
+        <div class="pipeline-step card" id="step-2">
+          <div class="step-header">
+            <div class="step-num">2</div>
+            <div>
+              <h3>Claude AI Rewrite</h3>
+              <p>Optimize content for social media</p>
+            </div>
+            <div class="step-icon"><i class="fa-solid fa-brain"></i></div>
+          </div>
+          <div class="step-body">
+            <label class="form-label">Prompt Template</label>
+            <select id="claude-template" class="form-input">
+              <option value="engaging">Engaging & Shareable</option>
+              <option value="informative">Informative & Educational</option>
+              <option value="promotional">Promotional</option>
+              <option value="storytelling">Storytelling</option>
+              <option value="custom">Custom Prompt</option>
+            </select>
+            <label class="form-label mt">Tone</label>
+            <select id="claude-tone" class="form-input">
+              <option value="professional">Professional</option>
+              <option value="casual">Casual & Friendly</option>
+              <option value="humorous">Humorous</option>
+              <option value="inspirational">Inspirational</option>
+            </select>
+            <label class="form-label mt">Custom Instructions <span class="optional">(optional)</span></label>
+            <textarea id="claude-custom" class="form-textarea" rows="3" placeholder="Add specific instructions for Claude..."></textarea>
+            <div class="output-preview hidden" id="claude-preview">
+              <div class="preview-header"><i class="fa-solid fa-brain"></i> Claude Output</div>
+              <div id="claude-preview-text"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3: Arvo -->
+        <div class="pipeline-step card" id="step-3">
+          <div class="step-header">
+            <div class="step-num">3</div>
+            <div>
+              <h3>Arvo Video</h3>
+              <p>Convert content to short video script</p>
+            </div>
+            <div class="step-icon"><i class="fa-solid fa-film"></i></div>
+          </div>
+          <div class="step-body">
+            <label class="form-label">Video Style</label>
+            <select id="arvo-style" class="form-input">
+              <option value="slideshow">Slideshow</option>
+              <option value="talking_head">Talking Head</option>
+              <option value="text_motion">Text in Motion</option>
+              <option value="reels">Reels / Short</option>
+            </select>
+            <label class="form-label mt">Duration</label>
+            <select id="arvo-duration" class="form-input">
+              <option value="15">15 seconds</option>
+              <option value="30" selected>30 seconds</option>
+              <option value="60">60 seconds</option>
+              <option value="90">90 seconds</option>
+            </select>
+            <label class="form-label mt">Aspect Ratio</label>
+            <select id="arvo-ratio" class="form-input">
+              <option value="9:16">9:16 (Vertical / Reels)</option>
+              <option value="1:1">1:1 (Square)</option>
+              <option value="16:9">16:9 (Landscape)</option>
+            </select>
+            <div class="output-preview hidden" id="arvo-preview">
+              <div class="preview-header"><i class="fa-solid fa-film"></i> Arvo Script</div>
+              <div id="arvo-preview-text"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 4: Blotato -->
+        <div class="pipeline-step card" id="step-4">
+          <div class="step-header">
+            <div class="step-num">4</div>
+            <div>
+              <h3>Blotato Formatting</h3>
+              <p>Format for each platform and schedule</p>
+            </div>
+            <div class="step-icon"><i class="fa-solid fa-rocket"></i></div>
+          </div>
+          <div class="step-body">
+            <label class="form-label">Target Platforms</label>
+            <div class="platform-checks">
+              <label class="check-label">
+                <input type="checkbox" id="plat-fb" checked />
+                <i class="fa-brands fa-facebook"></i> Facebook
+              </label>
+              <label class="check-label">
+                <input type="checkbox" id="plat-ig" checked />
+                <i class="fa-brands fa-instagram"></i> Instagram
+              </label>
+            </div>
+            <label class="form-label mt">Caption Override <span class="optional">(optional)</span></label>
+            <textarea id="blotato-caption" class="form-textarea" rows="3" placeholder="Leave blank to use Claude's output as caption..."></textarea>
+            <label class="form-label mt">Hashtags</label>
+            <input type="text" id="blotato-hashtags" class="form-input" placeholder="#contentmarketing #socialmedia #automation" />
+            <div class="output-preview hidden" id="blotato-preview">
+              <div class="preview-header"><i class="fa-solid fa-rocket"></i> Blotato Payload</div>
+              <div id="blotato-preview-text"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pipeline Controls -->
+      <div class="card pipeline-controls">
+        <div class="pipeline-actions">
+          <button class="btn btn-lg btn-primary" id="btn-run-pipeline" onclick="runPipeline()">
+            <i class="fa-solid fa-play"></i> Run Full Pipeline
+          </button>
+          <button class="btn btn-lg btn-secondary" id="btn-step-pipeline" onclick="runStepByStep()">
+            <i class="fa-solid fa-forward-step"></i> Step-by-Step
+          </button>
+          <button class="btn btn-lg btn-outline" onclick="resetPipeline()">
+            <i class="fa-solid fa-rotate-left"></i> Reset
+          </button>
+        </div>
+        <div class="pipeline-progress hidden" id="pipeline-progress">
+          <div class="progress-bar-wrap">
+            <div class="progress-bar" id="progress-bar"></div>
+          </div>
+          <div class="progress-steps" id="progress-steps"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== SCHEDULER PAGE ========== -->
+    <section class="page" id="page-scheduler">
+      <div class="page-header">
+        <h1>Post Scheduler</h1>
+        <p>Schedule automated posts to Facebook & Instagram</p>
+      </div>
+
+      <div class="scheduler-layout">
+        <div class="card scheduler-form">
+          <div class="card-header">
+            <h2><i class="fa-solid fa-calendar-plus"></i> Create Scheduled Post</h2>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Post Caption</label>
+            <textarea id="sched-caption" class="form-textarea" rows="5" placeholder="Write your post caption here..."></textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Hashtags</label>
+            <input type="text" id="sched-hashtags" class="form-input" placeholder="#marketing #social" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Media URL <span class="optional">(optional)</span></label>
+            <input type="url" id="sched-media" class="form-input" placeholder="https://cdn.example.com/video.mp4" />
+          </div>
+          <div class="form-row">
+            <div class="form-group half">
+              <label class="form-label">Schedule Date & Time</label>
+              <input type="datetime-local" id="sched-datetime" class="form-input" />
+            </div>
+            <div class="form-group half">
+              <label class="form-label">Repeat</label>
+              <select id="sched-repeat" class="form-input">
+                <option value="none">No Repeat</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">Bi-Weekly</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Platforms</label>
+            <div class="platform-checks">
+              <label class="check-label">
+                <input type="checkbox" id="sched-fb" checked />
+                <i class="fa-brands fa-facebook"></i> Facebook
+              </label>
+              <label class="check-label">
+                <input type="checkbox" id="sched-ig" checked />
+                <i class="fa-brands fa-instagram"></i> Instagram
+              </label>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-full" onclick="schedulePost()">
+            <i class="fa-solid fa-calendar-check"></i> Schedule Post
+          </button>
+        </div>
+
+        <div class="card scheduled-list">
+          <div class="card-header">
+            <h2><i class="fa-solid fa-list-check"></i> Scheduled Posts</h2>
+            <span class="badge badge-blue" id="sched-count">0 scheduled</span>
+          </div>
+          <div id="scheduled-posts-list">
+            <div class="empty-state">
+              <i class="fa-solid fa-calendar-xmark"></i>
+              <p>No posts scheduled yet</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== HISTORY PAGE ========== -->
+    <section class="page" id="page-history">
+      <div class="page-header">
+        <h1>Pipeline History</h1>
+        <p>All past automation runs and their results</p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2><i class="fa-solid fa-clock-rotate-left"></i> All Runs</h2>
+          <div class="header-actions">
+            <input type="text" id="history-search" class="form-input sm-input" placeholder="Search runs..." oninput="searchHistory()" />
+            <select id="history-filter" class="form-input sm-input" onchange="filterHistory()">
+              <option value="all">All Status</option>
+              <option value="posted">Posted</option>
+              <option value="pending">Pending</option>
+              <option value="failed">Failed</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Source URL</th>
+                <th>Status</th>
+                <th>Platforms</th>
+                <th>Created</th>
+                <th>Posted At</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="history-table-body">
+              <tr class="empty-row">
+                <td colspan="6"><i class="fa-solid fa-inbox"></i> No history yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== SETTINGS PAGE ========== -->
+    <section class="page" id="page-settings">
+      <div class="page-header">
+        <h1>Settings & API Keys</h1>
+        <p>Configure your integrations and credentials</p>
+      </div>
+
+      <div class="settings-grid">
+
+        <!-- Claude -->
+        <div class="card settings-card">
+          <div class="settings-card-header">
+            <div class="settings-icon bg-purple"><i class="fa-solid fa-brain"></i></div>
+            <div>
+              <h3>Claude (Anthropic)</h3>
+              <p>AI content rewriting</p>
+            </div>
+            <div class="conn-badge" id="conn-claude"><i class="fa-solid fa-circle"></i> Not set</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">API Key</label>
+            <div class="input-eye">
+              <input type="password" id="cfg-claude-key" class="form-input" placeholder="sk-ant-api03-..." />
+              <button class="eye-btn" onclick="toggleEye('cfg-claude-key')"><i class="fa-solid fa-eye"></i></button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Model</label>
+            <select id="cfg-claude-model" class="form-input">
+              <option value="claude-3-5-sonnet-20241022">claude-3-5-sonnet-20241022</option>
+              <option value="claude-3-5-haiku-20241022">claude-3-5-haiku-20241022</option>
+              <option value="claude-3-opus-20240229">claude-3-opus-20240229</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Max Tokens</label>
+            <input type="number" id="cfg-claude-tokens" class="form-input" value="2048" min="100" max="8192" />
+          </div>
+          <button class="btn btn-outline btn-full" onclick="saveSettings('claude')">
+            <i class="fa-solid fa-floppy-disk"></i> Save Claude Settings
+          </button>
+        </div>
+
+        <!-- Arvo -->
+        <div class="card settings-card">
+          <div class="settings-card-header">
+            <div class="settings-icon bg-orange"><i class="fa-solid fa-film"></i></div>
+            <div>
+              <h3>Arvo</h3>
+              <p>Video generation platform</p>
+            </div>
+            <div class="conn-badge" id="conn-arvo"><i class="fa-solid fa-circle"></i> Not set</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">API Key</label>
+            <div class="input-eye">
+              <input type="password" id="cfg-arvo-key" class="form-input" placeholder="arvo_live_..." />
+              <button class="eye-btn" onclick="toggleEye('cfg-arvo-key')"><i class="fa-solid fa-eye"></i></button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Workspace ID</label>
+            <input type="text" id="cfg-arvo-workspace" class="form-input" placeholder="ws_..." />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Default Template ID</label>
+            <input type="text" id="cfg-arvo-template" class="form-input" placeholder="tpl_..." />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Webhook URL <span class="optional">(for async render)</span></label>
+            <input type="url" id="cfg-arvo-webhook" class="form-input" placeholder="https://..." />
+          </div>
+          <button class="btn btn-outline btn-full" onclick="saveSettings('arvo')">
+            <i class="fa-solid fa-floppy-disk"></i> Save Arvo Settings
+          </button>
+        </div>
+
+        <!-- Blotato -->
+        <div class="card settings-card">
+          <div class="settings-card-header">
+            <div class="settings-icon bg-pink"><i class="fa-solid fa-rocket"></i></div>
+            <div>
+              <h3>Blotato</h3>
+              <p>Social scheduling & publishing</p>
+            </div>
+            <div class="conn-badge" id="conn-blotato"><i class="fa-solid fa-circle"></i> Not set</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">API Key</label>
+            <div class="input-eye">
+              <input type="password" id="cfg-blotato-key" class="form-input" placeholder="blotato_..." />
+              <button class="eye-btn" onclick="toggleEye('cfg-blotato-key')"><i class="fa-solid fa-eye"></i></button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Account ID</label>
+            <input type="text" id="cfg-blotato-account" class="form-input" placeholder="acc_..." />
+          </div>
+          <button class="btn btn-outline btn-full mt" onclick="saveSettings('blotato')">
+            <i class="fa-solid fa-floppy-disk"></i> Save Blotato Settings
+          </button>
+        </div>
+
+        <!-- Facebook -->
+        <div class="card settings-card">
+          <div class="settings-card-header">
+            <div class="settings-icon bg-blue"><i class="fa-brands fa-facebook"></i></div>
+            <div>
+              <h3>Facebook</h3>
+              <p>Page publishing credentials</p>
+            </div>
+            <div class="conn-badge" id="conn-fb"><i class="fa-solid fa-circle"></i> Not set</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Page Access Token</label>
+            <div class="input-eye">
+              <input type="password" id="cfg-fb-token" class="form-input" placeholder="EAABsb..." />
+              <button class="eye-btn" onclick="toggleEye('cfg-fb-token')"><i class="fa-solid fa-eye"></i></button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Page ID</label>
+            <input type="text" id="cfg-fb-page" class="form-input" placeholder="1234567890" />
+          </div>
+          <button class="btn btn-outline btn-full mt" onclick="saveSettings('facebook')">
+            <i class="fa-solid fa-floppy-disk"></i> Save Facebook Settings
+          </button>
+        </div>
+
+        <!-- Instagram -->
+        <div class="card settings-card">
+          <div class="settings-card-header">
+            <div class="settings-icon bg-grad-ig"><i class="fa-brands fa-instagram"></i></div>
+            <div>
+              <h3>Instagram</h3>
+              <p>Business account via Graph API</p>
+            </div>
+            <div class="conn-badge" id="conn-ig"><i class="fa-solid fa-circle"></i> Not set</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Access Token</label>
+            <div class="input-eye">
+              <input type="password" id="cfg-ig-token" class="form-input" placeholder="IGQVJXf..." />
+              <button class="eye-btn" onclick="toggleEye('cfg-ig-token')"><i class="fa-solid fa-eye"></i></button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Instagram Business Account ID</label>
+            <input type="text" id="cfg-ig-account" class="form-input" placeholder="17841..." />
+          </div>
+          <button class="btn btn-outline btn-full mt" onclick="saveSettings('instagram')">
+            <i class="fa-solid fa-floppy-disk"></i> Save Instagram Settings
+          </button>
+        </div>
+
+        <!-- Automation Settings -->
+        <div class="card settings-card settings-card-wide">
+          <div class="settings-card-header">
+            <div class="settings-icon bg-green"><i class="fa-solid fa-robot"></i></div>
+            <div>
+              <h3>Automation Settings</h3>
+              <p>Long-term pipeline scheduling</p>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group half">
+              <label class="form-label">Auto-Scrape Interval</label>
+              <select id="cfg-auto-interval" class="form-input">
+                <option value="manual">Manual Only</option>
+                <option value="hourly">Every Hour</option>
+                <option value="6hours">Every 6 Hours</option>
+                <option value="daily" selected>Daily</option>
+                <option value="weekly">Weekly</option>
+              </select>
+            </div>
+            <div class="form-group half">
+              <label class="form-label">Default Post Time</label>
+              <input type="time" id="cfg-post-time" class="form-input" value="09:00" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group half">
+              <label class="form-label">Content Queue Size</label>
+              <input type="number" id="cfg-queue-size" class="form-input" value="10" min="1" max="100" />
+            </div>
+            <div class="form-group half">
+              <label class="form-label">Retry on Failure</label>
+              <select id="cfg-retry" class="form-input">
+                <option value="0">No Retry</option>
+                <option value="1">1 Retry</option>
+                <option value="3" selected>3 Retries</option>
+                <option value="5">5 Retries</option>
+              </select>
+            </div>
+          </div>
+          <div class="toggle-row">
+            <label class="toggle-label">
+              <input type="checkbox" id="cfg-auto-post" checked />
+              <span class="toggle-switch"></span>
+              Auto-post after pipeline completes
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" id="cfg-notify" checked />
+              <span class="toggle-switch"></span>
+              Show browser notifications
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" id="cfg-hashtag-auto" checked />
+              <span class="toggle-switch"></span>
+              Auto-generate hashtags via Claude
+            </label>
+          </div>
+          <button class="btn btn-primary mt" onclick="saveSettings('automation')">
+            <i class="fa-solid fa-floppy-disk"></i> Save Automation Settings
+          </button>
+        </div>
+
+      </div>
+
+      <!-- Connection Test -->
+      <div class="card">
+        <div class="card-header">
+          <h2><i class="fa-solid fa-plug"></i> Test Connections</h2>
+        </div>
+        <div class="test-connections">
+          <button class="btn btn-outline" onclick="testConnection('claude')"><i class="fa-solid fa-brain"></i> Test Claude</button>
+          <button class="btn btn-outline" onclick="testConnection('arvo')"><i class="fa-solid fa-film"></i> Test Arvo</button>
+          <button class="btn btn-outline" onclick="testConnection('blotato')"><i class="fa-solid fa-rocket"></i> Test Blotato</button>
+          <button class="btn btn-outline" onclick="testConnection('facebook')"><i class="fa-brands fa-facebook"></i> Test Facebook</button>
+          <button class="btn btn-outline" onclick="testConnection('instagram')"><i class="fa-brands fa-instagram"></i> Test Instagram</button>
+          <button class="btn btn-primary" onclick="testAllConnections()"><i class="fa-solid fa-check-double"></i> Test All</button>
+        </div>
+        <div id="test-results" class="test-results hidden"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Toast notifications -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Modal overlay -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal" id="modal-box">
+      <div class="modal-header">
+        <h3 id="modal-title">Details</h3>
+        <button onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
