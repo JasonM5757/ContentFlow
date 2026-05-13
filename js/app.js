@@ -216,12 +216,15 @@ async function runPipeline() {
       PIPELINE_STATE.scraped = scrapeResult;
       setStepStatus("flow-website");
 
-      sourceText =
-  scrapeResult.content ||
-  scrapeResult.text ||
-  scrapeResult.excerpt ||
+      const scrapeData = scrapeResult.data || scrapeResult;
+
+sourceText =
+  scrapeData.content ||
+  scrapeData.text ||
+  scrapeData.excerpt ||
   sourceTextFallback;
-      scrapeSummary = scrapeResult.title || scrapeResult.url || websiteUrl;
+
+scrapeSummary = scrapeData.title || scrapeData.url || scrapeData.finalUrl || websiteUrl;
 
       assignFirstExistingValue(["source-text", "website-content", "claude-source-text"], sourceText);
     }
