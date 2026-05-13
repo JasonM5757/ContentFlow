@@ -1,5 +1,14 @@
 // ContentFlow app script
 
+const CONTENTFLOW_SERVICES = ["claude", "arvo", "blotato", "facebook", "instagram", "automation"];
+const PIPELINE_STEP_IDS = ["flow-website", "flow-claude", "flow-arvo", "flow-blotato"];
+const PIPELINE_STATE = {
+  scraped: null,
+  claude: null,
+  arvo: null,
+  blotato: null
+};
+
 document.addEventListener("DOMContentLoaded", () => {
   console.log("ContentFlow app.js loaded");
 
@@ -48,9 +57,10 @@ function toggleEye(inputId) {
 }
 
 function saveSettings(service) {
+  const selector = service === "automation" ? `[id^="cfg-auto"]` : `[id^="cfg-${service}"]`;
   const settings = {};
 
-  document.querySelectorAll(`[id^="cfg-${service}"], [id^="cfg-auto"]`).forEach((input) => {
+  document.querySelectorAll(selector).forEach((input) => {
     if (input.type === "checkbox") {
       settings[input.id] = input.checked;
     } else {
@@ -59,77 +69,243 @@ function saveSettings(service) {
   });
 
   localStorage.setItem(`contentflow_${service}_settings`, JSON.stringify(settings));
-  updateConnectionBadge(service, "Set", true);
+
+  if (service !== "automation") {
+    updateConnectionBadge(service, "Set", true);
+  }
+
   showToast(`${service} settings saved locally`);
 }
 
 function loadLocalSettings() {
-  ["claude", "arvo", "blotato", "facebook", "instagram", "automation"].forEach((service) => {
-    const saved = localStorage.getItem(`contentflow_${service}_settings`);
-    if (saved) {
+  CONTENTFLOW_SERVICES.forEach((service) => {
+    const saved = getStoredSettings(service);
+    if (!saved) return;
+
+    Object.entries(saved).forEach(([id, value]) => {
+      const input = document.getElementById(id);
+      if (!input) return;
+
+      if (input.type === "checkbox") {
+        input.checked = Boolean(value);
+      } else if (typeof value === "string" || typeof value === "number") {
+        input.value = value;
+      }
+    });
+
+    if (service !== "automation") {
       updateConnectionBadge(service, "Set", true);
     }
   });
 }
 
-function testConnection(service) {
-  const resultBox = document.getElementById("test-results");
-  if (resultBox) {
-    resultBox.classList.remove("hidden");
-    resultBox.innerHTML = `<strong>Testing ${service}...</strong><br>This front-end button is working. Live API validation still requires a backend route.`;
+async function testConnection(service, options = {}) {
+  const { silent = false } = options;
+
+  if (!silent) {
+    setResultBox(`<strong>Testing ${escapeHtml(service)}...</strong>`);
   }
 
-  updateConnectionBadge(service, "Ready", true);
-  showToast(`${service} test button works`);
+  try {
+    let response;
+
+    if (service === "claude") {
+      response = await postJson("/api/claude-rewrite", {
+        test: true,
+        config: getServiceSettings("claude")
+      });
+    } else if (service === "arvo") {
+      response = await postJson("/api/arvo-generate", {
+        test: true,
+        config: getServiceSettings("arvo")
+      });
+    } else if (service === "blotato") {
+      response = await postJson("/api/blotato-format", {
+        test: true,
+        config: getServiceSettings("blotato")
+      });
+    } else if (service === "facebook" || service === "instagram") {
+      response = await postJson("/api/publish-post", {
+        test: true,
+        platform: service,
+        platformConfigs: {
+          [service]: getServiceSettings(service)
+        }
+      });
+    } else {
+      response = { ok: true, message: "No live test required" };
+    }
+
+    updateConnectionBadge(service, "Ready", true);
+
+    if (!silent) {
+      setResultBox(
+        `<strong>${escapeHtml(service)} ready</strong><br>${escapeHtml(
+          response.message || response.status || "Connection test passed"
+        )}`
+      );
+      showToast(`${service} connection ready`);
+    }
+
+    return response;
+  } catch (error) {
+    updateConnectionBadge(service, "Error", false);
+
+    if (!silent) {
+      setResultBox(
+        `<strong>${escapeHtml(service)} failed</strong><br>${escapeHtml(
+          error.message || "Connection test failed"
+        )}`
+      );
+      showToast(`${service} connection failed`);
+    }
+
+    throw error;
+  }
 }
 
-function testAllConnections() {
-  ["claude", "arvo", "blotato", "facebook", "instagram"].forEach(testConnection);
-  showToast("All connection test buttons ran");
+async function testAllConnections() {
+  const services = ["claude", "arvo", "blotato", "facebook", "instagram"];
+  const lines = [];
+
+  setResultBox("<strong>Testing all services...</strong>");
+
+  for (const service of services) {
+    try {
+      const response = await testConnection(service, { silent: true });
+      lines.push(`✅ ${service}: ${response.message || response.status || "Ready"}`);
+    } catch (error) {
+      lines.push(`❌ ${service}: ${error.message || "Failed"}`);
+    }
+  }
+
+  setResultBox(`<strong>Connection test summary</strong><br>${lines.map(escapeHtml).join("<br>")}`);
+  showToast("All connection tests finished");
 }
 
-function runPipeline() {
-  setStepStatus("flow-website");
-  setTimeout(() => setStepStatus("flow-claude"), 300);
-  setTimeout(() => setStepStatus("flow-arvo"), 600);
-  setTimeout(() => setStepStatus("flow-blotato"), 900);
+async function runPipeline() {
+  resetStepStatuses();
+  hidePreviews();
 
-  const claudePreview = document.getElementById("claude-preview");
-  const claudeText = document.getElementById("claude-preview-text");
-  if (claudePreview && claudeText) {
-    claudePreview.classList.remove("hidden");
-    claudeText.textContent =
-      "Demo Claude output: Heavy-duty containers, mobile offices, and custom builds for Southern Arizona job sites, ranches, and businesses.";
+  const websiteUrl = firstFilledValue([
+    "website-url",
+    "source-url",
+    "scrape-url",
+    "pipeline-url",
+    "cfg-auto-source-url"
+  ]);
+  const sourceTextFallback = firstFilledValue([
+    "source-text",
+    "website-content",
+    "claude-source-text",
+    "sched-caption"
+  ]);
+
+  if (!websiteUrl && !sourceTextFallback) {
+    showToast("Add a website URL or source text first");
+    setResultBox("<strong>Pipeline blocked</strong><br>Add a website URL or source text first.");
+    return;
   }
 
-  const arvoPreview = document.getElementById("arvo-preview");
-  const arvoText = document.getElementById("arvo-preview-text");
-  if (arvoPreview && arvoText) {
-    arvoPreview.classList.remove("hidden");
-    arvoText.textContent =
-      "Demo Arvo script: Show containers, custom builds, and call to action.";
-  }
+  try {
+    let sourceText = sourceTextFallback;
+    let scrapeSummary = "Skipped website scrape";
 
-  const blotatoPreview = document.getElementById("blotato-preview");
-  const blotatoText = document.getElementById("blotato-preview-text");
-  if (blotatoPreview && blotatoText) {
-    blotatoPreview.classList.remove("hidden");
-    blotatoText.textContent = JSON.stringify(
-      {
-        platforms: ["Facebook", "Instagram"],
-        status: "Demo payload ready",
-        note: "Backend needed for live posting"
-      },
-      null,
-      2
+    if (websiteUrl) {
+      const scrapeResult = await postJson("/api/scrape-website", { url: websiteUrl });
+      PIPELINE_STATE.scraped = scrapeResult;
+      setStepStatus("flow-website");
+
+      sourceText = scrapeResult.content || sourceTextFallback;
+      scrapeSummary = scrapeResult.title || scrapeResult.url || websiteUrl;
+
+      assignFirstExistingValue(["source-text", "website-content", "claude-source-text"], sourceText);
+    }
+
+    if (!sourceText) {
+      throw new Error("No source content was available after scraping");
+    }
+
+    const businessName =
+      firstFilledValue(["business-name", "brand-name", "company-name", "cfg-auto-business-name"]) ||
+      humanizeUrl(websiteUrl) ||
+      "Your business";
+    const tone =
+      firstFilledValue(["claude-tone", "content-tone", "rewrite-tone", "cfg-claude-tone"]) ||
+      "confident, local, and helpful";
+    const goal =
+      firstFilledValue(["content-goal", "post-goal", "rewrite-goal", "cfg-auto-goal"]) ||
+      "Generate a high-converting social post";
+    const extraInstructions =
+      firstFilledValue(["claude-instructions", "rewrite-instructions", "cfg-claude-instructions"]) || "";
+
+    const claudeResult = await postJson("/api/claude-rewrite", {
+      sourceText,
+      businessName,
+      tone,
+      goal,
+      extraInstructions,
+      config: getServiceSettings("claude")
+    });
+
+    PIPELINE_STATE.claude = claudeResult;
+    setStepStatus("flow-claude");
+
+    renderPreview(
+      "claude-preview",
+      "claude-preview-text",
+      claudeResult.caption || claudeResult.shortCaption || claudeResult.rawText || ""
     );
-  }
 
-  showToast("Pipeline demo ran");
+    const arvoResult = await postJson("/api/arvo-generate", {
+      caption: claudeResult.caption || claudeResult.shortCaption || sourceText,
+      businessName,
+      videoGoal: goal,
+      durationSeconds: Number(firstFilledValue(["arvo-duration", "video-duration", "cfg-arvo-duration"]) || 20),
+      config: getServiceSettings("arvo")
+    });
+
+    PIPELINE_STATE.arvo = arvoResult;
+    setStepStatus("flow-arvo");
+
+    renderPreview(
+      "arvo-preview",
+      "arvo-preview-text",
+      arvoResult.script || formatShotList(arvoResult.shots || [])
+    );
+
+    const blotatoResult = await postJson("/api/blotato-format", {
+      caption: claudeResult.caption || sourceText,
+      shortCaption: claudeResult.shortCaption || "",
+      hashtags: claudeResult.hashtags || [],
+      videoScript: arvoResult.script || "",
+      platforms: getSelectedPlatforms(),
+      config: getServiceSettings("blotato")
+    });
+
+    PIPELINE_STATE.blotato = blotatoResult;
+    setStepStatus("flow-blotato");
+
+    renderPreview(
+      "blotato-preview",
+      "blotato-preview-text",
+      JSON.stringify(blotatoResult.payloads || blotatoResult, null, 2)
+    );
+
+    setResultBox(
+      `<strong>Pipeline completed</strong><br>${escapeHtml(scrapeSummary)}<br>${escapeHtml(
+        blotatoResult.message || "Formatted payload ready for publishing"
+      )}`
+    );
+    showToast("Pipeline completed");
+  } catch (error) {
+    setResultBox(`<strong>Pipeline failed</strong><br>${escapeHtml(error.message || "Unknown error")}`);
+    showToast(error.message || "Pipeline failed");
+  }
 }
 
 function runStepByStep() {
-  showToast("Step-by-step demo started");
+  showToast("Step-by-step mode started");
   runPipeline();
 }
 
@@ -138,34 +314,75 @@ function resetPipeline() {
     el.value = "";
   });
 
-  document.querySelectorAll(".output-preview").forEach((el) => {
-    el.classList.add("hidden");
-  });
+  hidePreviews();
+  resetStepStatuses();
+
+  PIPELINE_STATE.scraped = null;
+  PIPELINE_STATE.claude = null;
+  PIPELINE_STATE.arvo = null;
+  PIPELINE_STATE.blotato = null;
+
+  const resultBox = document.getElementById("test-results");
+  if (resultBox) {
+    resultBox.classList.add("hidden");
+    resultBox.innerHTML = "";
+  }
 
   showToast("Pipeline reset");
 }
 
-function schedulePost() {
-  const caption = document.getElementById("sched-caption")?.value || "";
+async function schedulePost() {
+  const caption =
+    document.getElementById("sched-caption")?.value ||
+    PIPELINE_STATE.claude?.caption ||
+    PIPELINE_STATE.claude?.shortCaption ||
+    "";
+  const mediaUrl = firstFilledValue(["sched-media-url", "media-url", "publish-media-url"]);
   const list = document.getElementById("scheduled-posts-list");
   const count = document.getElementById("sched-count");
+  const scheduledAt = buildScheduleTimestamp();
+  const platforms = getSelectedPlatforms();
 
   if (!caption.trim()) {
     showToast("Add a caption before scheduling");
     return;
   }
 
-  if (list) {
-    list.innerHTML = `
-      <div class="scheduled-item">
-        <strong>${escapeHtml(caption)}</strong>
-        <p>Scheduled locally. Backend needed for live publishing.</p>
-      </div>
-    `;
-  }
+  try {
+    const response = await postJson("/api/publish-post", {
+      platforms,
+      caption,
+      mediaUrl,
+      scheduledAt,
+      formattedPayload: PIPELINE_STATE.blotato?.payloads || null,
+      platformConfigs: {
+        facebook: getServiceSettings("facebook"),
+        instagram: getServiceSettings("instagram")
+      }
+    });
 
-  if (count) count.textContent = "1 scheduled";
-  showToast("Post scheduled locally");
+    if (list) {
+      list.innerHTML = response.results
+        .map(
+          (item) => `
+            <div class="scheduled-item">
+              <strong>${escapeHtml(item.platform)}</strong>
+              <p>${escapeHtml(item.status)}${item.remoteId ? ` · ${escapeHtml(item.remoteId)}` : ""}</p>
+            </div>
+          `
+        )
+        .join("");
+    }
+
+    if (count) {
+      count.textContent = `${response.results.length} scheduled`;
+    }
+
+    showToast(scheduledAt ? "Post scheduled" : "Publish payload prepared");
+  } catch (error) {
+    showToast(error.message || "Scheduling failed");
+    setResultBox(`<strong>Schedule failed</strong><br>${escapeHtml(error.message || "Unknown error")}`);
+  }
 }
 
 function searchHistory() {
@@ -185,6 +402,12 @@ function setStepStatus(id) {
   if (el) el.classList.add("active");
 }
 
+function resetStepStatuses() {
+  PIPELINE_STEP_IDS.forEach((id) => {
+    document.getElementById(id)?.classList.remove("active");
+  });
+}
+
 function updateConnectionBadge(service, text, good) {
   const map = {
     claude: ["conn-claude", "dot-claude", "lbl-claude"],
@@ -202,7 +425,7 @@ function updateConnectionBadge(service, text, good) {
   const label = document.getElementById(ids[2]);
 
   if (badge) {
-    badge.innerHTML = `<i class="fa-solid fa-circle"></i> ${text}`;
+    badge.innerHTML = `<i class="fa-solid fa-circle"></i> ${escapeHtml(text)}`;
     badge.classList.toggle("connected", good);
   }
 
@@ -229,6 +452,142 @@ function showToast(message) {
     toast.classList.remove("show");
     setTimeout(() => toast.remove(), 300);
   }, 3000);
+}
+
+function hidePreviews() {
+  document.querySelectorAll(".output-preview").forEach((el) => {
+    el.classList.add("hidden");
+  });
+}
+
+function renderPreview(wrapperId, textId, value) {
+  const wrapper = document.getElementById(wrapperId);
+  const target = document.getElementById(textId);
+
+  if (wrapper) wrapper.classList.remove("hidden");
+  if (target) target.textContent = value || "";
+}
+
+function setResultBox(html) {
+  const resultBox = document.getElementById("test-results");
+  if (!resultBox) return;
+
+  resultBox.classList.remove("hidden");
+  resultBox.innerHTML = html;
+}
+
+function getStoredSettings(service) {
+  try {
+    const raw = localStorage.getItem(`contentflow_${service}_settings`);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    console.warn(`Could not parse settings for ${service}`, error);
+    return null;
+  }
+}
+
+function getServiceSettings(service) {
+  const selector = service === "automation" ? `[id^="cfg-auto"]` : `[id^="cfg-${service}"]`;
+  const saved = getStoredSettings(service) || {};
+  const live = {};
+
+  document.querySelectorAll(selector).forEach((input) => {
+    live[input.id] = input.type === "checkbox" ? input.checked : input.value;
+  });
+
+  return { ...saved, ...live };
+}
+
+function getSelectedPlatforms() {
+  const explicit = Array.from(
+    document.querySelectorAll(
+      'input[name="publish-platform"]:checked, input[name="platforms"]:checked, [data-platform-toggle]:checked'
+    )
+  )
+    .map((input) => (input.value || input.getAttribute("data-platform-toggle") || "").toLowerCase())
+    .filter(Boolean);
+
+  if (explicit.length) {
+    return Array.from(new Set(explicit));
+  }
+
+  return ["facebook", "instagram"];
+}
+
+function buildScheduleTimestamp() {
+  const dateValue = firstFilledValue(["sched-date", "schedule-date", "publish-date"]);
+  const timeValue = firstFilledValue(["sched-time", "schedule-time", "publish-time"]);
+
+  if (!dateValue) return null;
+  return `${dateValue}T${timeValue || "09:00"}:00`;
+}
+
+function assignFirstExistingValue(ids, value) {
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.value = value;
+      return;
+    }
+  }
+}
+
+function firstFilledValue(ids) {
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+
+    const value = typeof el.value === "string" ? el.value.trim() : "";
+    if (value) return value;
+  }
+
+  return "";
+}
+
+function humanizeUrl(url) {
+  if (!url) return "";
+
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.replace(/^www\./i, "");
+  } catch (error) {
+    return "";
+  }
+}
+
+function formatShotList(shots) {
+  if (!Array.isArray(shots) || !shots.length) {
+    return "No shot list returned";
+  }
+
+  return shots
+    .map((shot, index) => `${index + 1}. ${shot.time || ""} ${shot.visual || ""} ${shot.voiceover || ""}`.trim())
+    .join("\n");
+}
+
+async function postJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload || {})
+  });
+
+  const text = await response.text();
+  let data;
+
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (error) {
+    data = { message: text || "Invalid JSON response" };
+  }
+
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.error || data.message || `Request failed with status ${response.status}`);
+  }
+
+  return data;
 }
 
 function escapeHtml(value) {
