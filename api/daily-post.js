@@ -169,7 +169,10 @@ Return JSON only with this exact shape:
 
 Rules:
 - Date context: ${dateKey} (America/Phoenix).
-- Keep the caption under 2,200 characters so Instagram accepts it.
+- Keep the caption under 600 characters.
+- Write one concise promotional post, not a full website summary.
+- Do not list every product or price from the website.
+- Mention no more than one price if useful.
 - Lead with a strong hook in the first line.
 - Mention Southern Arizona where it feels natural.
 - End with a clear CTA pointing to ${DEFAULT_SOURCE_URL}.
@@ -220,6 +223,9 @@ ${sourceText}
 
   // Append hashtags if Claude returned them as a separate array.
   let caption = String(parsed.caption).trim();
+  if (caption.length > 900) {
+  caption = caption.slice(0, 897).trim() + "...";
+}
   if (Array.isArray(parsed.hashtags) && parsed.hashtags.length) {
     const tags = parsed.hashtags
       .map((tag) => (tag.startsWith("#") ? tag : `#${tag}`))
