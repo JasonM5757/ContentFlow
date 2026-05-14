@@ -9,7 +9,16 @@ const WORDPRESS_MEDIA_ENDPOINT =
 // Fallback approved media library — only used if WordPress fetch fails or
 // returns no valid full-size JPG/JPEGs.
 const APPROVED_MEDIA_LIBRARY = [
-  "https://conexcreation.com/wp-content/uploads/2026/05/custom-tack-room-JPG-300x225.jpg"
+  {
+    url: "https://conexcreation.com/wp-content/uploads/2026/05/custom-tack-room-JPG-300x225.jpg",
+    title: "Custom Tack Room",
+    altText: "Custom tack room shipping container build",
+    caption: "Custom tack room container build",
+    description:
+      "A custom-built shipping container converted into a tack room for ranch and equestrian use.",
+    slug: "custom-tack-room",
+    id: null
+  }
 ];
 
 const GRAPH_API_VERSION = "v20.0";
@@ -23,7 +32,7 @@ const IG_CONTAINER_POLL_MAX_ATTEMPTS = 20; // ~50 seconds total
 // a warm Lambda window.
 const WP_MEDIA_CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const WP_MEDIA_CACHE =
-  globalThis.__CONTENTFLOW_WP_MEDIA_CACHE__ || { fetchedAt: 0, urls: [] };
+  globalThis.__CONTENTFLOW_WP_MEDIA_CACHE__ || { fetchedAt: 0, items: [] };
 globalThis.__CONTENTFLOW_WP_MEDIA_CACHE__ = WP_MEDIA_CACHE;
 
 // Lightweight in-memory duplicate protection per warm serverless instance.
@@ -114,13 +123,91 @@ function isAllowedFullSizeJpg(url) {
   return true;
 }
 
+function decodeEntities(text) {
+  return (text || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+function stripHtml(html) {
+  return decodeEntities(
+    (html || "")
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+      .replace(/<iframe[\s\S]*?<\/iframe>/gi, " ")
+      .replace(/<\/(p|div|section|article|li|h1|h2|h3|h4|h5|h6)>/gi, "$&\n")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim()
+  );
+}
+
+function extractTitle(html) {
+  const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return match ? decodeEntities(match[1].trim()) : "";
+}
+
+function pickRenderedOrRaw(field) {
+  if (!field) return "";
+  if (typeof field === "string") return field;
+  if (typeof field === "object") {
+    if (typeof field.rendered === "string") return field.rendered;
+    if (typeof field.raw === "string") return field.raw;
+  }
+  return "";
+}
+
+function cleanMediaText(value, maxLength = 600) {
+  if (!value) return "";
+  const stripped = stripHtml(String(value));
+  if (!stripped) return "";
+  return stripped.length > maxLength
+    ? stripped.slice(0, maxLength - 1).trim() + "…"
+    : stripped;
+}
+
+function buildMediaObject(item) {
+  if (!item || typeof item !== "object") return null;
+
+  const fullUrl = extractFullSizeUrl(item);
+  if (!fullUrl) return null;
+  if (!isAllowedFullSizeJpg(fullUrl)) return null;
+
+  const title = cleanMediaText(pickRenderedOrRaw(item.title), 200);
+  const altText = cleanMediaText(item.alt_text, 300);
+  const caption = cleanMediaText(pickRenderedOrRaw(item.caption), 600);
+  const description = cleanMediaText(pickRenderedOrRaw(item.description), 800);
+  const slug = typeof item.slug === "string" ? item.slug : "";
+  const id = item.id ?? null;
+
+  return {
+    url: fullUrl,
+    title,
+    altText,
+    caption,
+    description,
+    slug,
+    id
+  };
+}
+
 async function fetchWordPressMediaLibrary() {
   const now = Date.now();
   if (
-    WP_MEDIA_CACHE.urls.length &&
+    Array.isArray(WP_MEDIA_CACHE.items) &&
+    WP_MEDIA_CACHE.items.length &&
     now - WP_MEDIA_CACHE.fetchedAt < WP_MEDIA_CACHE_TTL_MS
   ) {
-    return { urls: WP_MEDIA_CACHE.urls.slice(), cached: true };
+    return { items: WP_MEDIA_CACHE.items.slice(), cached: true };
   }
 
   const controller = new AbortController();
@@ -156,54 +243,69 @@ async function fetchWordPressMediaLibrary() {
       const mime = item?.mime_type || "";
       if (mime && mime !== "image/jpeg" && mime !== "image/jpg") continue;
 
-      const fullUrl = extractFullSizeUrl(item);
-      if (!fullUrl) continue;
-      if (!isAllowedFullSizeJpg(fullUrl)) continue;
+      const mediaObject = buildMediaObject(item);
+      if (!mediaObject) continue;
 
-      candidates.push(fullUrl);
+      candidates.push(mediaObject);
     }
 
-    // De-duplicate while preserving order.
+    // De-duplicate by URL while preserving order.
     const seen = new Set();
-    const uniqueUrls = [];
-    for (const url of candidates) {
-      if (!seen.has(url)) {
-        seen.add(url);
-        uniqueUrls.push(url);
+    const uniqueItems = [];
+    for (const candidate of candidates) {
+      if (!seen.has(candidate.url)) {
+        seen.add(candidate.url);
+        uniqueItems.push(candidate);
       }
     }
 
     WP_MEDIA_CACHE.fetchedAt = now;
-    WP_MEDIA_CACHE.urls = uniqueUrls;
+    WP_MEDIA_CACHE.items = uniqueItems;
 
-    return { urls: uniqueUrls.slice(), cached: false };
+    return { items: uniqueItems.slice(), cached: false };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function rotateByDate(urls, dateKey) {
-  if (!Array.isArray(urls) || urls.length === 0) return null;
+function rotateByDate(list, dateKey) {
+  if (!Array.isArray(list) || list.length === 0) return null;
   // Deterministic rotation by date so a different image is chosen each day,
   // and the same date always picks the same image (useful for dedupe).
   const seed = Number.parseInt(hashSignature(dateKey).slice(-6), 16);
-  const index = seed % urls.length;
-  return urls[index];
+  const index = seed % list.length;
+  return list[index];
+}
+
+function buildSelection(item, source, available, fallbackUsed, error = null) {
+  return {
+    mediaUrl: item?.url || null,
+    mediaTitle: item?.title || "",
+    mediaAltText: item?.altText || "",
+    mediaCaption: item?.caption || "",
+    mediaDescription: item?.description || "",
+    mediaSlug: item?.slug || "",
+    mediaId: item?.id ?? null,
+    source,
+    available,
+    fallbackUsed,
+    error
+  };
 }
 
 async function pickDailyMedia(dateKey) {
   // 1) Try the WordPress Media Library first.
   try {
-    const { urls, cached } = await fetchWordPressMediaLibrary();
-    if (urls.length) {
-      const selected = rotateByDate(urls, dateKey);
-      if (isAllowedFullSizeJpg(selected)) {
-        return {
-          mediaUrl: selected,
-          source: cached ? "wordpress-cache" : "wordpress",
-          available: urls.length,
-          fallbackUsed: false
-        };
+    const { items, cached } = await fetchWordPressMediaLibrary();
+    if (items.length) {
+      const selected = rotateByDate(items, dateKey);
+      if (selected && isAllowedFullSizeJpg(selected.url)) {
+        return buildSelection(
+          selected,
+          cached ? "wordpress-cache" : "wordpress",
+          items.length,
+          false
+        );
       }
     }
     // No valid JPGs returned — fall through to fallback.
@@ -213,58 +315,25 @@ async function pickDailyMedia(dateKey) {
   }
 
   // 2) Fall back to the hardcoded APPROVED_MEDIA_LIBRARY.
-  const fallback = APPROVED_MEDIA_LIBRARY.filter(isJpgUrl);
+  const fallback = APPROVED_MEDIA_LIBRARY.filter((entry) => isJpgUrl(entry?.url));
   if (!fallback.length) {
-    return {
-      mediaUrl: null,
-      source: "none",
-      available: 0,
-      fallbackUsed: true,
-      error: WP_MEDIA_CACHE.lastError || "No JPGs available."
-    };
+    return buildSelection(
+      null,
+      "none",
+      0,
+      true,
+      WP_MEDIA_CACHE.lastError || "No JPGs available."
+    );
   }
 
   const selected = rotateByDate(fallback, dateKey);
-  return {
-    mediaUrl: selected,
-    source: "fallback",
-    available: fallback.length,
-    fallbackUsed: true,
-    error: WP_MEDIA_CACHE.lastError || null
-  };
-}
-
-function decodeEntities(text) {
-  return (text || "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">");
-}
-
-function stripHtml(html) {
-  return decodeEntities(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-      .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
-      .replace(/<iframe[\s\S]*?<\/iframe>/gi, " ")
-      .replace(/<\/(p|div|section|article|li|h1|h2|h3|h4|h5|h6)>/gi, "$&\n")
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+\n/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .replace(/[ \t]{2,}/g, " ")
-      .trim()
+  return buildSelection(
+    selected,
+    "fallback",
+    fallback.length,
+    true,
+    WP_MEDIA_CACHE.lastError || null
   );
-}
-
-function extractTitle(html) {
-  const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  return match ? decodeEntities(match[1].trim()) : "";
 }
 
 async function scrapeSourceWebsite(url) {
@@ -319,7 +388,7 @@ function extractJson(text) {
   }
 }
 
-async function generateDailyCaption({ scrape, dateKey }) {
+async function generateDailyCaption({ scrape, dateKey, media }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("ANTHROPIC_API_KEY is not configured.");
@@ -327,11 +396,27 @@ async function generateDailyCaption({ scrape, dateKey }) {
 
   const sourceText = scrape.excerpt || scrape.title || DEFAULT_SOURCE_URL;
 
+  const safeMedia = media || {};
+  const mediaUrl = safeMedia.mediaUrl || "";
+  const mediaTitle = safeMedia.mediaTitle || "";
+  const mediaAltText = safeMedia.mediaAltText || "";
+  const mediaCaption = safeMedia.mediaCaption || "";
+  const mediaDescription = safeMedia.mediaDescription || "";
+  const mediaSlug = safeMedia.mediaSlug || "";
+
   const prompt = `
 You are writing the official daily social post for Conex Creation
 (${DEFAULT_SOURCE_URL}). The audience is Southern Arizona job sites,
 ranches, contractors, and small businesses interested in shipping
 containers, mobile offices, and custom container builds.
+
+Selected image context:
+- Image URL: ${mediaUrl}
+- Image title: ${mediaTitle}
+- Image alt text: ${mediaAltText}
+- Image caption: ${mediaCaption}
+- Image description: ${mediaDescription}
+- Image slug: ${mediaSlug}
 
 Return JSON only with this exact shape:
 {
@@ -343,11 +428,12 @@ Return JSON only with this exact shape:
 
 Rules:
 - Date context: ${dateKey} (America/Phoenix).
+- The caption MUST match the selected image context. If the image appears to be homeowner storage, write about homeowner/storage use. If it is a mobile office, write about mobile offices. If it is a tack room, write about tack rooms. Do not write about an unrelated product category.
 - Keep the caption under 600 characters.
 - Write one concise promotional post, not a full website summary.
 - Do not list every product, service, or price from the website.
 - Mention Southern Arizona where it feels natural.
-- Mention one clear offer or use case.
+- Mention one clear offer or use case tied to the selected image.
 - End with a short CTA pointing to ${DEFAULT_SOURCE_URL}.
 - Keep hashtags relevant, max 6.
 - Lead with a strong hook in the first line.
@@ -595,6 +681,12 @@ module.exports = async function handler(req, res) {
     scrape: null,
     caption: null,
     mediaUrl: null,
+    mediaTitle: null,
+    mediaAltText: null,
+    mediaCaption: null,
+    mediaDescription: null,
+    mediaSlug: null,
+    mediaId: null,
     mediaSource: null,
     mediaAvailable: 0,
     mediaFallbackUsed: false,
@@ -636,6 +728,12 @@ module.exports = async function handler(req, res) {
 
     const mediaUrl = mediaSelection.mediaUrl;
     log.mediaUrl = mediaUrl;
+    log.mediaTitle = mediaSelection.mediaTitle || null;
+    log.mediaAltText = mediaSelection.mediaAltText || null;
+    log.mediaCaption = mediaSelection.mediaCaption || null;
+    log.mediaDescription = mediaSelection.mediaDescription || null;
+    log.mediaSlug = mediaSelection.mediaSlug || null;
+    log.mediaId = mediaSelection.mediaId ?? null;
 
     // 2. Scrape the source website.
     let scrape;
@@ -663,7 +761,11 @@ module.exports = async function handler(req, res) {
     // 3. Generate the daily caption via Claude.
     let claude;
     try {
-      claude = await generateDailyCaption({ scrape, dateKey });
+      claude = await generateDailyCaption({
+        scrape,
+        dateKey,
+        media: mediaSelection
+      });
     } catch (error) {
       log.errors.push(`Claude failed: ${error.message}`);
       return json(res, 500, log);
