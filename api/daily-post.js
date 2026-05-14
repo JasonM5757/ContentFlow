@@ -3,8 +3,11 @@
 // Does not remove or modify the existing manual pipeline.
 
 const DEFAULT_SOURCE_URL = "https://conexcreation.com";
+const WORDPRESS_MEDIA_ENDPOINT =
+  "https://conexcreation.com/wp-json/wp/v2/media?per_page=100&media_type=image";
 
-// Approved backend media library. Only .jpg / .jpeg URLs are used.
+// Fallback approved media library — only used if WordPress fetch fails or
+// returns no valid full-size JPG/JPEGs.
 const APPROVED_MEDIA_LIBRARY = [
   "https://conexcreation.com/wp-content/uploads/2026/05/custom-tack-room-JPG-300x225.jpg"
 ];
@@ -15,6 +18,13 @@ const CLAUDE_MODEL = "claude-sonnet-4-6";
 // Instagram container readiness polling (mirrors api/publish-post.js).
 const IG_CONTAINER_POLL_INTERVAL_MS = 2500;
 const IG_CONTAINER_POLL_MAX_ATTEMPTS = 20; // ~50 seconds total
+
+// WordPress media cache to avoid re-fetching on every duplicate run within
+// a warm Lambda window.
+const WP_MEDIA_CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
+const WP_MEDIA_CACHE =
+  globalThis.__CONTENTFLOW_WP_MEDIA_CACHE__ || { fetchedAt: 0, urls: [] };
+globalThis.__CONTENTFLOW_WP_MEDIA_CACHE__ = WP_MEDIA_CACHE;
 
 // Lightweight in-memory duplicate protection per warm serverless instance.
 const RECENT_RUNS = globalThis.__CONTENTFLOW_DAILY_RUNS__ || new Map();
@@ -42,22 +52,186 @@ function hashSignature(input) {
   return hash.toString(16);
 }
 
-function pickDailyMedia(dateKey) {
-  const jpgOnly = APPROVED_MEDIA_LIBRARY.filter((url) =>
-    /\.(jpg|jpeg)(\?|$)/i.test(url)
-  );
-  if (!jpgOnly.length) return null;
-
-  // Deterministic rotation by date so the same day always selects the same image.
-  const seed = Number.parseInt(hashSignature(dateKey).slice(-6), 16);
-  const index = seed % jpgOnly.length;
-  return jpgOnly[index];
+function isJpgUrl(url) {
+  if (typeof url !== "string" || !url) return false;
+  if (!/^https?:\/\//i.test(url)) return false;
+  // Strict: must end in .jpg or .jpeg (optionally followed by a query string).
+  return /\.(jpe?g)(\?[^\s]*)?$/i.test(url);
 }
 
 function isValidJpgUrl(url) {
-  if (typeof url !== "string" || !url) return false;
-  if (!/^https?:\/\//i.test(url)) return false;
-  return /\.(jpg|jpeg)(\?|$)/i.test(url);
+  return isJpgUrl(url);
+}
+
+function looksLikeWordPressThumbnail(url) {
+  // WordPress auto-generated thumbnails embed dimensions in the filename,
+  // e.g. -150x150.jpg, -300x225.jpg, -768x1024.jpg, -1024x768.jpeg.
+  return /-\d{2,5}x\d{2,5}\.(jpe?g)(\?[^\s]*)?$/i.test(url);
+}
+
+function looksLikeIcon(url) {
+  return /(icon|favicon|logo-thumb|sprite|placeholder)/i.test(url);
+}
+
+function stripWordPressSizeSuffix(url) {
+  // Convert "name-1024x768.jpg" → "name.jpg" to get the full-size original.
+  return url.replace(/-(\d{2,5})x(\d{2,5})(\.(jpe?g))(\?[^\s]*)?$/i, "$3$5");
+}
+
+function extractFullSizeUrl(item) {
+  if (!item || typeof item !== "object") return null;
+
+  // Prefer the explicit full-size from media_details.sizes.full.
+  const sizes = item?.media_details?.sizes;
+  if (sizes && typeof sizes === "object") {
+    const full = sizes.full || sizes.original;
+    if (full?.source_url && isJpgUrl(full.source_url)) {
+      return full.source_url;
+    }
+  }
+
+  // Fall back to the top-level source_url and strip any -WxH suffix.
+  const sourceUrl = typeof item.source_url === "string" ? item.source_url : "";
+  if (!sourceUrl) return null;
+
+  const candidate = looksLikeWordPressThumbnail(sourceUrl)
+    ? stripWordPressSizeSuffix(sourceUrl)
+    : sourceUrl;
+
+  return candidate;
+}
+
+function isAllowedFullSizeJpg(url) {
+  if (!isJpgUrl(url)) return false;
+  if (looksLikeWordPressThumbnail(url)) return false;
+  if (looksLikeIcon(url)) return false;
+
+  // Explicitly reject non-JPG formats and document types just in case.
+  if (/\.(png|svg|webp|gif|bmp|tiff|pdf|mp4|mov|webm)(\?|$)/i.test(url)) {
+    return false;
+  }
+
+  return true;
+}
+
+async function fetchWordPressMediaLibrary() {
+  const now = Date.now();
+  if (
+    WP_MEDIA_CACHE.urls.length &&
+    now - WP_MEDIA_CACHE.fetchedAt < WP_MEDIA_CACHE_TTL_MS
+  ) {
+    return { urls: WP_MEDIA_CACHE.urls.slice(), cached: true };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+
+  try {
+    const response = await fetch(WORDPRESS_MEDIA_ENDPOINT, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (compatible; ContentFlowDailyBot/1.0; +https://contentflow.vercel.app)",
+        Accept: "application/json"
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`WordPress media fetch failed (${response.status}).`);
+    }
+
+    const items = await response.json();
+    if (!Array.isArray(items)) {
+      throw new Error("WordPress media endpoint did not return an array.");
+    }
+
+    const candidates = [];
+    for (const item of items) {
+      // Require image media type from WordPress.
+      if (item?.media_type && item.media_type !== "image") continue;
+
+      // Require image/jpeg MIME explicitly when available.
+      const mime = item?.mime_type || "";
+      if (mime && mime !== "image/jpeg" && mime !== "image/jpg") continue;
+
+      const fullUrl = extractFullSizeUrl(item);
+      if (!fullUrl) continue;
+      if (!isAllowedFullSizeJpg(fullUrl)) continue;
+
+      candidates.push(fullUrl);
+    }
+
+    // De-duplicate while preserving order.
+    const seen = new Set();
+    const uniqueUrls = [];
+    for (const url of candidates) {
+      if (!seen.has(url)) {
+        seen.add(url);
+        uniqueUrls.push(url);
+      }
+    }
+
+    WP_MEDIA_CACHE.fetchedAt = now;
+    WP_MEDIA_CACHE.urls = uniqueUrls;
+
+    return { urls: uniqueUrls.slice(), cached: false };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function rotateByDate(urls, dateKey) {
+  if (!Array.isArray(urls) || urls.length === 0) return null;
+  // Deterministic rotation by date so a different image is chosen each day,
+  // and the same date always picks the same image (useful for dedupe).
+  const seed = Number.parseInt(hashSignature(dateKey).slice(-6), 16);
+  const index = seed % urls.length;
+  return urls[index];
+}
+
+async function pickDailyMedia(dateKey) {
+  // 1) Try the WordPress Media Library first.
+  try {
+    const { urls, cached } = await fetchWordPressMediaLibrary();
+    if (urls.length) {
+      const selected = rotateByDate(urls, dateKey);
+      if (isAllowedFullSizeJpg(selected)) {
+        return {
+          mediaUrl: selected,
+          source: cached ? "wordpress-cache" : "wordpress",
+          available: urls.length,
+          fallbackUsed: false
+        };
+      }
+    }
+    // No valid JPGs returned — fall through to fallback.
+  } catch (error) {
+    // Swallow and fall back to the local array, but include the error in logs.
+    WP_MEDIA_CACHE.lastError = error.message;
+  }
+
+  // 2) Fall back to the hardcoded APPROVED_MEDIA_LIBRARY.
+  const fallback = APPROVED_MEDIA_LIBRARY.filter(isJpgUrl);
+  if (!fallback.length) {
+    return {
+      mediaUrl: null,
+      source: "none",
+      available: 0,
+      fallbackUsed: true,
+      error: WP_MEDIA_CACHE.lastError || "No JPGs available."
+    };
+  }
+
+  const selected = rotateByDate(fallback, dateKey);
+  return {
+    mediaUrl: selected,
+    source: "fallback",
+    available: fallback.length,
+    fallbackUsed: true,
+    error: WP_MEDIA_CACHE.lastError || null
+  };
 }
 
 function decodeEntities(text) {
@@ -171,12 +345,12 @@ Rules:
 - Date context: ${dateKey} (America/Phoenix).
 - Keep the caption under 600 characters.
 - Write one concise promotional post, not a full website summary.
-- Do not list every product or price from the website.
-- Mention no more than one price if useful.
-- Lead with a strong hook in the first line.
+- Do not list every product, service, or price from the website.
 - Mention Southern Arizona where it feels natural.
-- End with a clear CTA pointing to ${DEFAULT_SOURCE_URL}.
-- Keep hashtags relevant, max 8.
+- Mention one clear offer or use case.
+- End with a short CTA pointing to ${DEFAULT_SOURCE_URL}.
+- Keep hashtags relevant, max 6.
+- Lead with a strong hook in the first line.
 - Do not invent statistics or false claims.
 
 Source content (from ${scrape.finalUrl || scrape.url}):
@@ -224,8 +398,8 @@ ${sourceText}
   // Append hashtags if Claude returned them as a separate array.
   let caption = String(parsed.caption).trim();
   if (caption.length > 900) {
-  caption = caption.slice(0, 897).trim() + "...";
-}
+    caption = caption.slice(0, 897).trim() + "...";
+  }
   if (Array.isArray(parsed.hashtags) && parsed.hashtags.length) {
     const tags = parsed.hashtags
       .map((tag) => (tag.startsWith("#") ? tag : `#${tag}`))
@@ -421,6 +595,10 @@ module.exports = async function handler(req, res) {
     scrape: null,
     caption: null,
     mediaUrl: null,
+    mediaSource: null,
+    mediaAvailable: 0,
+    mediaFallbackUsed: false,
+    mediaError: null,
     facebook: null,
     instagram: null,
     duplicate: false,
@@ -439,12 +617,24 @@ module.exports = async function handler(req, res) {
   try {
     pruneOldRuns(Date.now());
 
-    // 1. Select today's approved JPG.
-    const mediaUrl = pickDailyMedia(dateKey);
-    if (!isValidJpgUrl(mediaUrl)) {
-      log.errors.push("No valid JPG available in the approved media library.");
+    // 1. Select today's approved JPG (WordPress Media Library → fallback array).
+    const mediaSelection = await pickDailyMedia(dateKey);
+    log.mediaSource = mediaSelection.source;
+    log.mediaAvailable = mediaSelection.available;
+    log.mediaFallbackUsed = mediaSelection.fallbackUsed;
+    if (mediaSelection.error) {
+      log.mediaError = mediaSelection.error;
+      log.errors.push(`Media library: ${mediaSelection.error}`);
+    }
+
+    if (!isValidJpgUrl(mediaSelection.mediaUrl)) {
+      log.errors.push(
+        "No valid full-size JPG available from WordPress or fallback library."
+      );
       return json(res, 500, log);
     }
+
+    const mediaUrl = mediaSelection.mediaUrl;
     log.mediaUrl = mediaUrl;
 
     // 2. Scrape the source website.
