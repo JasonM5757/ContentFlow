@@ -69,8 +69,15 @@ function stripJson(text) {
   }
 }
 
-function removeMarkdown(text) {
+function normalizeBrand(text) {
   return String(text || "")
+    .replace(/Conex Creation and Supply/g, "Conex Creation & Supply")
+    .replace(/Conex Creation And Supply/g, "Conex Creation & Supply")
+    .replace(/Conex Creation &amp; Supply/g, "Conex Creation & Supply");
+}
+
+function removeMarkdown(text) {
+  return normalizeBrand(text)
     .replace(/\*\*(.*?)\*\*/g, "$1")
     .replace(/__(.*?)__/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
@@ -469,6 +476,7 @@ You are creating a local SEO blog post for Conex Creation & Supply.
 
 Business context:
 - Business: Conex Creation & Supply
+- IMPORTANT: Always write the business name exactly as "Conex Creation & Supply". Never write "Conex Creation and Supply."
 - Website: ${DEFAULT_SOURCE_URL}
 - Phone: 520-253-3194
 - Service area: Southern Arizona, Willcox, Tucson, Pima County, Santa Cruz County, Nogales, Green Valley, Sahuarita, Vail, Marana, Oro Valley, Safford, Sierra Vista, Benson, Cochise County, and Graham County
