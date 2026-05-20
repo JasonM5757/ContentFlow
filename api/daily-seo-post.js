@@ -269,6 +269,14 @@ function scoreMediaForTopic(media, topic) {
     if (haystack.includes("cool")) score -= 10;
   }
 
+  if (/tack|tack room|horse|saddle|bridle/.test(topicText)) {
+    if (haystack.includes("tack")) score += 35;
+    if (haystack.includes("tack-room")) score += 35;
+    if (haystack.includes("saddle")) score += 25;
+    if (haystack.includes("bridle")) score += 20;
+    if (haystack.includes("horse")) score += 15;
+  }
+
   if (/ranch|agriculture|farm|tack/.test(topicText)) {
     if (haystack.includes("ranch")) score += 20;
     if (haystack.includes("farm")) score += 15;
@@ -355,6 +363,181 @@ async function selectFeaturedMedia(topic) {
       ? "Matched by topic keywords."
       : "No strong keyword match; selected first usable approved media."
   };
+}
+
+function getCategoryNameForTopic(topic) {
+  const text = [
+    topic.topicType,
+    topic.primaryKeyword,
+    topic.title,
+    topic.slugBase,
+    topic.audience
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (/cool|cooling|cool station|heat/.test(text)) return "Cool Stations";
+  if (/mobile office|office/.test(text)) return "Mobile Offices";
+  if (/tack|tack room|horse|saddle|bridle/.test(text)) return "Tack Rooms";
+  if (/custom|build|workshop|shed/.test(text)) return "Custom Builds";
+  if (/ranch|agriculture|farm/.test(text)) return "Ranch & Agriculture";
+  if (/delivery|site prep|requirements/.test(text)) return "Delivery Tips";
+  if (/rental|rentals|rent/.test(text)) return "Container Rentals";
+  if (/sale|sales|buy|purchase/.test(text)) return "Container Sales";
+
+  return "Container Rentals";
+}
+
+function getTagNamesForTopic(topic) {
+  const text = [
+    topic.topicType,
+    topic.primaryKeyword,
+    topic.title,
+    topic.slugBase,
+    topic.audience
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const tags = new Set([
+    "Southern Arizona",
+    "Tucson",
+    "Pima County",
+    "Shipping Containers",
+    "Conex Creation"
+  ]);
+
+  if (/cool|cooling|cool station|heat/.test(text)) {
+    ["Cool Stations", "Mobile Cooling Stations", "Heat Safety", "Jobsite Cooling"].forEach((tag) => tags.add(tag));
+  }
+
+  if (/mobile office|office/.test(text)) {
+    ["Mobile Offices", "Jobsite Office", "Container Office"].forEach((tag) => tags.add(tag));
+  }
+
+  if (/tack|tack room|horse|saddle|bridle/.test(text)) {
+    ["Tack Rooms", "Horse Property", "Ranch Storage", "Saddle Storage"].forEach((tag) => tags.add(tag));
+  }
+
+  if (/custom|build|workshop|shed/.test(text)) {
+    ["Custom Builds", "Container Builds", "Workshops", "Backyard Storage"].forEach((tag) => tags.add(tag));
+  }
+
+  if (/ranch|agriculture|farm/.test(text)) {
+    ["Ranch Storage", "Agriculture", "Farm Storage", "Rural Delivery"].forEach((tag) => tags.add(tag));
+  }
+
+  if (/delivery|site prep|requirements/.test(text)) {
+    ["Container Delivery", "Delivery Requirements", "Site Prep"].forEach((tag) => tags.add(tag));
+  }
+
+  if (/rental|rentals|rent/.test(text)) {
+    ["Container Rentals", "Storage Rentals", "Jobsite Storage"].forEach((tag) => tags.add(tag));
+  }
+
+  if (/sale|sales|buy|purchase/.test(text)) {
+    ["Container Sales", "Containers for Sale", "One Trip Containers"].forEach((tag) => tags.add(tag));
+  }
+
+  return [...tags];
+}
+
+async function findTermByName(baseUrl, taxonomy, name) {
+  const endpoint = `${baseUrl}/wp-json/wp/v2/${taxonomy}?search=${encodeURIComponent(name)}&per_page=100`;
+
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      authorization: authHeader()
+    }
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`WordPress ${taxonomy} search failed (${response.status}): ${text.slice(0, 300)}`);
+  }
+
+  let terms;
+
+  try {
+    terms = JSON.parse(text);
+  } catch {
+    throw new Error(`WordPress ${taxonomy} search returned non-JSON data.`);
+  }
+
+  if (!Array.isArray(terms)) return null;
+
+  return terms.find((term) => String(term.name || "").toLowerCase() === name.toLowerCase()) || null;
+}
+
+async function createTerm(baseUrl, taxonomy, name) {
+  const response = await fetch(`${baseUrl}/wp-json/wp/v2/${taxonomy}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: authHeader()
+    },
+    body: JSON.stringify({ name })
+  });
+
+  const text = await response.text();
+
+  let body;
+
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = { raw: text };
+  }
+
+  if (!response.ok) {
+    if (body?.code === "term_exists" && body?.data?.term_id) {
+      return { id: body.data.term_id, name };
+    }
+
+    throw new Error(`WordPress ${taxonomy} create failed (${response.status}): ${text.slice(0, 300)}`);
+  }
+
+  return body;
+}
+
+async function getOrCreateTerm(baseUrl, taxonomy, name) {
+  const existing = await findTermByName(baseUrl, taxonomy, name);
+  if (existing?.id) return existing;
+
+  return createTerm(baseUrl, taxonomy, name);
+}
+
+async function resolveTaxonomies(topic) {
+  const baseUrl = process.env.WORDPRESS_BASE_URL || DEFAULT_SOURCE_URL;
+
+  const result = {
+    categoryName: getCategoryNameForTopic(topic),
+    categoryIds: [],
+    tagNames: getTagNamesForTopic(topic),
+    tagIds: [],
+    errors: []
+  };
+
+  try {
+    const category = await getOrCreateTerm(baseUrl, "categories", result.categoryName);
+    if (category?.id) result.categoryIds.push(category.id);
+  } catch (error) {
+    result.errors.push(`Category error: ${error.message}`);
+  }
+
+  for (const tagName of result.tagNames) {
+    try {
+      const tag = await getOrCreateTerm(baseUrl, "tags", tagName);
+      if (tag?.id) result.tagIds.push(tag.id);
+    } catch (error) {
+      result.errors.push(`Tag error for ${tagName}: ${error.message}`);
+    }
+  }
+
+  return result;
 }
 
 function paragraphToHtmlBlock(paragraph) {
@@ -480,7 +663,7 @@ Business context:
 - Website: ${DEFAULT_SOURCE_URL}
 - Phone: 520-253-3194
 - Service area: Southern Arizona, Willcox, Tucson, Pima County, Santa Cruz County, Nogales, Green Valley, Sahuarita, Vail, Marana, Oro Valley, Safford, Sierra Vista, Benson, Cochise County, and Graham County
-- Offers: shipping container sales, container rentals, mobile offices, Arizona Cool Stations, custom container builds, rent-to-own, delivery
+- Offers: shipping container sales, container rentals, mobile offices, Arizona Cool Stations, custom container builds, tack rooms, rent-to-own, delivery
 
 Current rental pricing to include when relevant:
 - 20' Standard Container Rental: $135/month
@@ -599,7 +782,7 @@ async function updateMediaAltText({ mediaId, altText }) {
   return { ok: true };
 }
 
-async function createWordPressPost({ seo, topic, dateKey, media }) {
+async function createWordPressPost({ seo, topic, dateKey, media, taxonomies }) {
   const baseUrl = process.env.WORDPRESS_BASE_URL || DEFAULT_SOURCE_URL;
   const status = process.env.WORDPRESS_AUTO_PUBLISH === "true" ? "publish" : "draft";
   const slug = `${seo.slug || topic.slugBase}-${dateKey}`;
@@ -614,6 +797,14 @@ async function createWordPressPost({ seo, topic, dateKey, media }) {
 
   if (media?.id) {
     postBody.featured_media = media.id;
+  }
+
+  if (taxonomies?.categoryIds?.length) {
+    postBody.categories = taxonomies.categoryIds;
+  }
+
+  if (taxonomies?.tagIds?.length) {
+    postBody.tags = taxonomies.tagIds;
   }
 
   const response = await fetch(`${baseUrl}/wp-json/wp/v2/posts`, {
@@ -662,6 +853,7 @@ module.exports = async function handler(req, res) {
     topic,
     selectedMedia: null,
     mediaAltTextUpdate: null,
+    taxonomies: null,
     wordpressStatus: null,
     wordpressPostId: null,
     wordpressLink: null,
@@ -687,6 +879,9 @@ module.exports = async function handler(req, res) {
           reason: mediaResult.reason
         };
 
+    const taxonomies = await resolveTaxonomies(topic);
+    log.taxonomies = taxonomies;
+
     const seo = await generateSeoContent({ topic, dateKey, media });
 
     if (media?.id && seo.imageAltText) {
@@ -696,7 +891,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    const wp = await createWordPressPost({ seo, topic, dateKey, media });
+    const wp = await createWordPressPost({ seo, topic, dateKey, media, taxonomies });
 
     log.ok = true;
     log.wordpressStatus = wp.status;
