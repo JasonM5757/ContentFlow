@@ -33,9 +33,7 @@ function getTopicForRequest(req, date = new Date()) {
       (item) => item.day.toLowerCase() === requestedDay
     );
 
-    if (matchedTopic) {
-      return matchedTopic;
-    }
+    if (matchedTopic) return matchedTopic;
   }
 
   return getTodaysTopic(date);
@@ -143,15 +141,12 @@ function extractBestImageUrl(item) {
 
   if (sizes && typeof sizes === "object") {
     const preferred = sizes.full || sizes.large || sizes.medium_large || sizes.medium;
-
     if (preferred?.source_url && isUsableImageUrl(preferred.source_url)) {
       return preferred.source_url;
     }
   }
 
-  if (item?.source_url && isUsableImageUrl(item.source_url)) {
-    return item.source_url;
-  }
+  if (item?.source_url && isUsableImageUrl(item.source_url)) return item.source_url;
 
   return null;
 }
@@ -163,26 +158,19 @@ function mediaObjectFromWp(item) {
   const url = extractBestImageUrl(item);
   if (!url) return null;
 
-  const title = cleanMediaText(pickRenderedOrRaw(item.title), 200);
-  const altText = cleanMediaText(item.alt_text, 300);
-  const caption = cleanMediaText(pickRenderedOrRaw(item.caption), 600);
-  const description = cleanMediaText(pickRenderedOrRaw(item.description), 800);
-  const slug = typeof item.slug === "string" ? item.slug : "";
-  const id = item.id ?? null;
-
   return {
-    id,
+    id: item.id ?? null,
     url,
-    title,
-    altText,
-    caption,
-    description,
-    slug
+    title: cleanMediaText(pickRenderedOrRaw(item.title), 200),
+    altText: cleanMediaText(item.alt_text, 300),
+    caption: cleanMediaText(pickRenderedOrRaw(item.caption), 600),
+    description: cleanMediaText(pickRenderedOrRaw(item.description), 800),
+    slug: typeof item.slug === "string" ? item.slug : ""
   };
 }
 
-function topicKeywords(topic) {
-  const base = [
+function topicText(topic) {
+  return [
     topic.topicType,
     topic.primaryKeyword,
     topic.title,
@@ -191,6 +179,10 @@ function topicKeywords(topic) {
   ]
     .join(" ")
     .toLowerCase();
+}
+
+function topicKeywords(topic) {
+  const base = topicText(topic);
 
   const keywords = new Set(
     base
@@ -200,8 +192,8 @@ function topicKeywords(topic) {
   );
 
   if (/rental|rentals|rent/.test(base)) {
-    ["rental", "rentals", "storage", "container", "containers", "jobsite"].forEach(
-      (word) => keywords.add(word)
+    ["rental", "rentals", "storage", "container", "containers", "jobsite"].forEach((word) =>
+      keywords.add(word)
     );
   }
 
@@ -243,18 +235,9 @@ function scoreMediaForTopic(media, topic) {
     .toLowerCase();
 
   let score = 0;
+  const text = topicText(topic);
 
-  const topicText = [
-    topic.topicType,
-    topic.primaryKeyword,
-    topic.title,
-    topic.slugBase,
-    topic.audience
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  if (/cool|cooling|cool station|heat/.test(topicText)) {
+  if (/cool|cooling|cool station|heat/.test(text)) {
     if (haystack.includes("cool station")) score += 25;
     if (haystack.includes("cool-station")) score += 25;
     if (haystack.includes("cooling")) score += 15;
@@ -262,14 +245,14 @@ function scoreMediaForTopic(media, topic) {
     if (haystack.includes("office")) score -= 20;
   }
 
-  if (/office|mobile office/.test(topicText)) {
+  if (/office|mobile office/.test(text)) {
     if (haystack.includes("office")) score += 25;
     if (haystack.includes("mobile office")) score += 25;
     if (haystack.includes("office-rental")) score += 20;
     if (haystack.includes("cool")) score -= 10;
   }
 
-  if (/tack|tack room|horse|saddle|bridle/.test(topicText)) {
+  if (/tack|tack room|horse|saddle|bridle/.test(text)) {
     if (haystack.includes("tack")) score += 35;
     if (haystack.includes("tack-room")) score += 35;
     if (haystack.includes("saddle")) score += 25;
@@ -277,21 +260,21 @@ function scoreMediaForTopic(media, topic) {
     if (haystack.includes("horse")) score += 15;
   }
 
-  if (/ranch|agriculture|farm|tack/.test(topicText)) {
+  if (/ranch|agriculture|farm|tack/.test(text)) {
     if (haystack.includes("ranch")) score += 20;
     if (haystack.includes("farm")) score += 15;
     if (haystack.includes("tack")) score += 20;
     if (haystack.includes("agriculture")) score += 15;
   }
 
-  if (/custom|build|workshop|shed/.test(topicText)) {
+  if (/custom|build|workshop|shed/.test(text)) {
     if (haystack.includes("custom")) score += 20;
     if (haystack.includes("build")) score += 15;
     if (haystack.includes("workshop")) score += 20;
     if (haystack.includes("shed")) score += 15;
   }
 
-  if (/rental|rentals|storage/.test(topicText) && !/office|cool/.test(topicText)) {
+  if (/rental|rentals|storage/.test(text) && !/office|cool/.test(text)) {
     if (haystack.includes("rental")) score += 20;
     if (haystack.includes("container")) score += 15;
     if (haystack.includes("storage")) score += 15;
@@ -326,7 +309,6 @@ async function fetchWordPressMedia() {
   }
 
   let items;
-
   try {
     items = JSON.parse(text);
   } catch {
@@ -334,7 +316,6 @@ async function fetchWordPressMedia() {
   }
 
   if (!Array.isArray(items)) return [];
-
   return items.map(mediaObjectFromWp).filter(Boolean);
 }
 
@@ -359,22 +340,15 @@ async function selectFeaturedMedia(topic) {
     selected: best.media,
     available: mediaItems.length,
     score: best.score,
-    reason: best.score > 0
-      ? "Matched by topic keywords."
-      : "No strong keyword match; selected first usable approved media."
+    reason:
+      best.score > 0
+        ? "Matched by topic keywords."
+        : "No strong keyword match; selected first usable approved media."
   };
 }
 
 function getCategoryNameForTopic(topic) {
-  const text = [
-    topic.topicType,
-    topic.primaryKeyword,
-    topic.title,
-    topic.slugBase,
-    topic.audience
-  ]
-    .join(" ")
-    .toLowerCase();
+  const text = topicText(topic);
 
   if (/cool|cooling|cool station|heat/.test(text)) return "Cool Stations";
   if (/mobile office|office/.test(text)) return "Mobile Offices";
@@ -389,15 +363,7 @@ function getCategoryNameForTopic(topic) {
 }
 
 function getTagNamesForTopic(topic) {
-  const text = [
-    topic.topicType,
-    topic.primaryKeyword,
-    topic.title,
-    topic.slugBase,
-    topic.audience
-  ]
-    .join(" ")
-    .toLowerCase();
+  const text = topicText(topic);
 
   const tags = new Set([
     "Southern Arizona",
@@ -408,7 +374,9 @@ function getTagNamesForTopic(topic) {
   ]);
 
   if (/cool|cooling|cool station|heat/.test(text)) {
-    ["Cool Stations", "Mobile Cooling Stations", "Heat Safety", "Jobsite Cooling"].forEach((tag) => tags.add(tag));
+    ["Cool Stations", "Mobile Cooling Stations", "Heat Safety", "Jobsite Cooling"].forEach((tag) =>
+      tags.add(tag)
+    );
   }
 
   if (/mobile office|office/.test(text)) {
@@ -416,15 +384,21 @@ function getTagNamesForTopic(topic) {
   }
 
   if (/tack|tack room|horse|saddle|bridle/.test(text)) {
-    ["Tack Rooms", "Horse Property", "Ranch Storage", "Saddle Storage"].forEach((tag) => tags.add(tag));
+    ["Tack Rooms", "Horse Property", "Ranch Storage", "Saddle Storage"].forEach((tag) =>
+      tags.add(tag)
+    );
   }
 
   if (/custom|build|workshop|shed/.test(text)) {
-    ["Custom Builds", "Container Builds", "Workshops", "Backyard Storage"].forEach((tag) => tags.add(tag));
+    ["Custom Builds", "Container Builds", "Workshops", "Backyard Storage"].forEach((tag) =>
+      tags.add(tag)
+    );
   }
 
   if (/ranch|agriculture|farm/.test(text)) {
-    ["Ranch Storage", "Agriculture", "Farm Storage", "Rural Delivery"].forEach((tag) => tags.add(tag));
+    ["Ranch Storage", "Agriculture", "Farm Storage", "Rural Delivery"].forEach((tag) =>
+      tags.add(tag)
+    );
   }
 
   if (/delivery|site prep|requirements/.test(text)) {
@@ -436,14 +410,18 @@ function getTagNamesForTopic(topic) {
   }
 
   if (/sale|sales|buy|purchase/.test(text)) {
-    ["Container Sales", "Containers for Sale", "One Trip Containers"].forEach((tag) => tags.add(tag));
+    ["Container Sales", "Containers for Sale", "One Trip Containers"].forEach((tag) =>
+      tags.add(tag)
+    );
   }
 
   return [...tags];
 }
 
 async function findTermByName(baseUrl, taxonomy, name) {
-  const endpoint = `${baseUrl}/wp-json/wp/v2/${taxonomy}?search=${encodeURIComponent(name)}&per_page=100`;
+  const endpoint = `${baseUrl}/wp-json/wp/v2/${taxonomy}?search=${encodeURIComponent(
+    name
+  )}&per_page=100`;
 
   const response = await fetch(endpoint, {
     method: "GET",
@@ -460,7 +438,6 @@ async function findTermByName(baseUrl, taxonomy, name) {
   }
 
   let terms;
-
   try {
     terms = JSON.parse(text);
   } catch {
@@ -485,7 +462,6 @@ async function createTerm(baseUrl, taxonomy, name) {
   const text = await response.text();
 
   let body;
-
   try {
     body = JSON.parse(text);
   } catch {
@@ -506,7 +482,6 @@ async function createTerm(baseUrl, taxonomy, name) {
 async function getOrCreateTerm(baseUrl, taxonomy, name) {
   const existing = await findTermByName(baseUrl, taxonomy, name);
   if (existing?.id) return existing;
-
   return createTerm(baseUrl, taxonomy, name);
 }
 
@@ -538,6 +513,44 @@ async function resolveTaxonomies(topic) {
   }
 
   return result;
+}
+
+function getTopicSpecificCta(topic) {
+  const text = topicText(topic);
+
+  if (/tack|tack room|horse|saddle|bridle/.test(text)) {
+    return "Ready to price a custom container tack room, ranch storage container, or horse property storage solution?";
+  }
+
+  if (/cool|cooling|cool station|heat/.test(text)) {
+    return "Ready to rent an Arizona Cool Station or add a cooled break area to your jobsite?";
+  }
+
+  if (/mobile office|office/.test(text)) {
+    return "Ready to price a mobile office container for your jobsite or business?";
+  }
+
+  if (/custom|build|workshop|shed/.test(text)) {
+    return "Ready to price a custom container build, workshop, shed, office, or backyard project?";
+  }
+
+  if (/ranch|agriculture|farm/.test(text)) {
+    return "Ready to price a ranch storage container, tack room, or agricultural storage solution?";
+  }
+
+  if (/delivery|site prep|requirements/.test(text)) {
+    return "Ready to schedule container delivery or confirm what your site needs before placement?";
+  }
+
+  if (/rental|rentals|rent/.test(text)) {
+    return "Ready to price a storage container rental, mobile office rental, or Cool Station rental?";
+  }
+
+  if (/sale|sales|buy|purchase/.test(text)) {
+    return "Ready to price a new or used shipping container for your property, jobsite, or business?";
+  }
+
+  return "Ready to price a container, rental, mobile office, Cool Station, or custom build?";
 }
 
 function paragraphToHtmlBlock(paragraph) {
@@ -588,7 +601,10 @@ function buildPostHtml(data, topic, media) {
 
   const body = Array.isArray(data.sections)
     ? data.sections
-        .map((section) => `<h2>${escapeHtml(section.heading)}</h2>\n${paragraphsToHtml(section.body)}`)
+        .map(
+          (section) =>
+            `<h2>${escapeHtml(section.heading)}</h2>\n${paragraphsToHtml(section.body)}`
+        )
         .join("\n")
     : "";
 
@@ -611,8 +627,12 @@ function buildPostHtml(data, topic, media) {
     "/#upgrades": "View container upgrades"
   };
 
+  const ctaText = getTopicSpecificCta(topic);
+
   const links = Array.isArray(topic.internalLinks)
-    ? `<h2>Get a Quote</h2>\n<p>Ready to price a container, rental, mobile office, or Cool Station? Use the links below or contact Conex Creation & Supply.</p>\n<ul>` +
+    ? `<h2>Get a Quote</h2>\n<p>${escapeHtml(
+        ctaText
+      )} Use the links below or contact Conex Creation & Supply.</p>\n<ul>` +
       topic.internalLinks
         .map((link) => {
           const label = linkLabels[link] || "Learn more";
@@ -795,17 +815,9 @@ async function createWordPressPost({ seo, topic, dateKey, media, taxonomies }) {
     content: buildPostHtml(seo, topic, media)
   };
 
-  if (media?.id) {
-    postBody.featured_media = media.id;
-  }
-
-  if (taxonomies?.categoryIds?.length) {
-    postBody.categories = taxonomies.categoryIds;
-  }
-
-  if (taxonomies?.tagIds?.length) {
-    postBody.tags = taxonomies.tagIds;
-  }
+  if (media?.id) postBody.featured_media = media.id;
+  if (taxonomies?.categoryIds?.length) postBody.categories = taxonomies.categoryIds;
+  if (taxonomies?.tagIds?.length) postBody.tags = taxonomies.tagIds;
 
   const response = await fetch(`${baseUrl}/wp-json/wp/v2/posts`, {
     method: "POST",
@@ -819,7 +831,6 @@ async function createWordPressPost({ seo, topic, dateKey, media, taxonomies }) {
   const text = await response.text();
 
   let body;
-
   try {
     body = JSON.parse(text);
   } catch {
