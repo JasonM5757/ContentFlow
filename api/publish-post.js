@@ -11,6 +11,7 @@ function json(res, status, body) {
 
 function readBody(req) {
   if (!req.body) return {};
+
   if (typeof req.body === 'string') {
     try {
       return JSON.parse(req.body);
@@ -18,6 +19,7 @@ function readBody(req) {
       return {};
     }
   }
+
   return req.body;
 }
 
@@ -41,7 +43,9 @@ function normalizePlatform(value) {
 
 function normalizePlatforms(body) {
   if (Array.isArray(body.platforms) && body.platforms.length) {
-    return body.platforms.map(normalizePlatform);
+    return body.platforms
+      .map(normalizePlatform)
+      .flatMap((platform) => (platform === 'both' ? ['facebook', 'instagram'] : [platform]));
   }
 
   const platform = normalizePlatform(body.platform);
@@ -63,6 +67,7 @@ async function graphRequest(path, params) {
   });
 
   const text = await response.text();
+
   let body;
 
   try {
@@ -79,8 +84,37 @@ async function graphRequest(path, params) {
   return body;
 }
 
+async function graphGet(path, params) {
+  const response = await fetch(
+    `https://graph.facebook.com/v20.0/${path}?${new URLSearchParams(params)}`
+  );
+
+  const text = await response.text();
+
+  let body;
+
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = { raw: text };
+  }
+
+  if (!response.ok || body.error) {
+    const message = body?.error?.message || text || 'Graph API request failed.';
+    throw new Error(message);
+  }
+
+  return body;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function publishFacebook({ token, pageId, message, linkUrl, imageUrl }) {
-  if (!pageId) throw new Error('FACEBOOK_PAGE_ID is not configured.');
+  if (!pageId) {
+    throw new Error('FACEBOOK_PAGE_ID is not configured.');
+  }
 
   if (imageUrl) {
     return graphRequest(`${pageId}/photos`, {
@@ -96,32 +130,6 @@ async function publishFacebook({ token, pageId, message, linkUrl, imageUrl }) {
     message: message || '',
     ...(linkUrl ? { link: linkUrl } : {})
   });
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function graphGet(path, params) {
-  const response = await fetch(
-    `https://graph.facebook.com/v20.0/${path}?${new URLSearchParams(params)}`
-  );
-
-  const text = await response.text();
-  let body;
-
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = { raw: text };
-  }
-
-  if (!response.ok || body.error) {
-    const message = body?.error?.message || text || 'Graph API request failed.';
-    throw new Error(message);
-  }
-
-  return body;
 }
 
 async function waitForInstagramContainer({ token, creationId }) {
@@ -146,10 +154,12 @@ async function waitForInstagramContainer({ token, creationId }) {
 }
 
 async function publishInstagram({ token, igId, caption, imageUrl, videoUrl }) {
-  if (!igId) throw new Error('INSTAGRAM_BUSINESS_ACCOUNT_ID is not configured.');
+  if (!igId) {
+    throw new Error('INSTAGRAM_BUSINESS_ACCOUNT_ID is not configured.');
+  }
 
   if (!imageUrl && !videoUrl) {
-    throw new Error('Instagram publishing requires mediaUrl/imageUrl/videoUrl.');
+    throw new Error('Instagram publishing requires mediaUrl, imageUrl, or videoUrl.');
   }
 
   const creation = imageUrl
@@ -173,30 +183,6 @@ async function publishInstagram({ token, igId, caption, imageUrl, videoUrl }) {
     token,
     creationId: creation.id
   });
-
-  return graphRequest(`${igId}/media_publish`, {
-    access_token: token,
-    creation_id: creation.id
-  });
-}
-  if (!igId) throw new Error('INSTAGRAM_BUSINESS_ACCOUNT_ID is not configured.');
-
-  if (!imageUrl && !videoUrl) {
-    throw new Error('Instagram publishing requires mediaUrl/imageUrl/videoUrl.');
-  }
-
-  const creation = imageUrl
-    ? await graphRequest(`${igId}/media`, {
-        access_token: token,
-        image_url: imageUrl,
-        caption: caption || ''
-      })
-    : await graphRequest(`${igId}/media`, {
-        access_token: token,
-        media_type: 'REELS',
-        video_url: videoUrl,
-        caption: caption || ''
-      });
 
   return graphRequest(`${igId}/media_publish`, {
     access_token: token,
@@ -297,6 +283,9 @@ module.exports = async function handler(req, res) {
       results
     });
   } catch (error) {
-    return json(res, 500, { ok: false, error: error.message });
+    return json(res, 500, {
+      ok: false,
+      error: error.message
+    });
   }
 };
