@@ -69,8 +69,17 @@ function stripJson(text) {
   }
 }
 
-function escapeHtml(text) {
+function removeMarkdown(text) {
   return String(text || "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1");
+}
+
+function escapeHtml(text) {
+  return removeMarkdown(text)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
@@ -341,10 +350,36 @@ async function selectFeaturedMedia(topic) {
   };
 }
 
+function paragraphToHtmlBlock(paragraph) {
+  const clean = removeMarkdown(paragraph || "").trim();
+  if (!clean) return "";
+
+  const lines = clean
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const looksLikeList =
+    lines.length > 1 && lines.every((line) => /^[-*•]\s+/.test(line) || /^\d+\.\s+/.test(line));
+
+  if (looksLikeList) {
+    const items = lines
+      .map((line) => line.replace(/^[-*•]\s+/, "").replace(/^\d+\.\s+/, "").trim())
+      .filter(Boolean)
+      .map((line) => `<li>${escapeHtml(line)}</li>`)
+      .join("\n");
+
+    return `<ul>\n${items}\n</ul>`;
+  }
+
+  return `<p>${escapeHtml(clean)}</p>`;
+}
+
 function paragraphsToHtml(text) {
   return String(text || "")
     .split(/\n{2,}/)
-    .map((p) => `<p>${escapeHtml(p.trim())}</p>`)
+    .map(paragraphToHtmlBlock)
+    .filter(Boolean)
     .join("\n");
 }
 
@@ -484,6 +519,9 @@ Rules:
 - Write for real customers, not search engines only.
 - Include the primary keyword naturally.
 - If the topic is about rentals, include a short rental pricing section using the current rental pricing provided above.
+- If listing prices, write them in normal sentence form instead of Markdown bullets.
+- Do not use Markdown formatting inside the JSON fields. Do not use **bold**, markdown bullets, tables, or raw HTML.
+- Use plain sentences and paragraphs only inside JSON fields.
 - Mention Southern Arizona naturally.
 - Mention Tucson and Pima County naturally when relevant.
 - Do not invent certifications, laws, guarantees, or fake statistics.
@@ -542,7 +580,7 @@ async function updateMediaAltText({ mediaId, altText }) {
       "content-type": "application/json",
       authorization: authHeader()
     },
-    body: JSON.stringify({ alt_text: altText })
+    body: JSON.stringify({ alt_text: removeMarkdown(altText) })
   });
 
   if (!response.ok) {
@@ -559,10 +597,10 @@ async function createWordPressPost({ seo, topic, dateKey, media }) {
   const slug = `${seo.slug || topic.slugBase}-${dateKey}`;
 
   const postBody = {
-    title: seo.seoTitle || topic.title,
+    title: removeMarkdown(seo.seoTitle || topic.title),
     slug,
     status,
-    excerpt: seo.excerpt || seo.metaDescription || "",
+    excerpt: removeMarkdown(seo.excerpt || seo.metaDescription || ""),
     content: buildPostHtml(seo, topic, media)
   };
 
