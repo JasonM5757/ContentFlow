@@ -46,12 +46,12 @@ const CONTENT_CALENDAR = [
   },
   {
     day: "Saturday",
-    topicType: "Ranch and Agriculture",
-    primaryKeyword: "shipping containers for ranch storage in Southern Arizona",
-    title: "Shipping Containers for Ranch Storage in Southern Arizona",
-    slugBase: "shipping-containers-ranch-storage-southern-arizona",
-    audience: "ranches, farms, horse owners, feed storage users, and agricultural operations in Pima County, Santa Cruz County, Cochise County, Graham County, and Southern Arizona",
-    internalLinks: ["/#custom-builds", "/#inventory", "/#quote"]
+    topicType: "Tack Rooms",
+    primaryKeyword: "shipping container tack rooms in Southern Arizona",
+    title: "Shipping Container Tack Rooms for Ranches and Horse Properties",
+    slugBase: "shipping-container-tack-rooms-southern-arizona",
+    audience: "ranchers, horse owners, ropers, rodeo families, equestrian properties, farms, and agricultural operations in Tucson, Pima County, Santa Cruz County, Cochise County, Graham County, and Southern Arizona",
+    internalLinks: ["/#custom-builds", "/#upgrades", "/#quote"]
   },
   {
     day: "Sunday",
