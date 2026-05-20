@@ -119,7 +119,7 @@ Business context:
 - Business: Conex Creation & Supply
 - Website: ${DEFAULT_SOURCE_URL}
 - Phone: 520-253-3194
-- Service area: Southern Arizona, Willcox, Tucson, Safford, Sierra Vista, Benson, Cochise County, Graham County
+- Service area: Southern Arizona, Willcox, Tucson, Pima County, Santa Cruz County, Nogales, Green Valley, Sahuarita, Vail, Marana, Oro Valley, Safford, Sierra Vista, Benson, Cochise County, and Graham County
 - Offers: shipping container sales, container rentals, mobile offices, Arizona Cool Stations, custom container builds, rent-to-own, delivery
 
 Today's topic:
