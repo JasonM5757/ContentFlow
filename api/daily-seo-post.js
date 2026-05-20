@@ -780,6 +780,198 @@ Rules:
   return parsed;
 }
 
+async function generateSocialContent({ topic, seo, media, wordpressLink }) {
+  const articleUrl = wordpressLink || DEFAULT_SOURCE_URL;
+  const topicType = topic.topicType || "Shipping Containers";
+  const title = removeMarkdown(seo.seoTitle || topic.title || "");
+  const metaDescription = removeMarkdown(seo.metaDescription || seo.excerpt || "");
+
+  const hashtags = new Set([
+    "#ConexCreation",
+    "#ShippingContainers",
+    "#SouthernArizona",
+    "#Tucson"
+  ]);
+
+  const text = topicText(topic);
+
+  if (/cool|cooling|cool station|heat/.test(text)) {
+    ["#CoolStations", "#JobsiteSafety", "#ArizonaHeat", "#Construction"].forEach((tag) =>
+      hashtags.add(tag)
+    );
+  }
+
+  if (/mobile office|office/.test(text)) {
+    ["#MobileOffice", "#JobsiteOffice", "#Contractors"].forEach((tag) => hashtags.add(tag));
+  }
+
+  if (/tack|tack room|horse|saddle|bridle/.test(text)) {
+    ["#TackRoom", "#HorseProperty", "#RanchStorage", "#Rodeo"].forEach((tag) =>
+      hashtags.add(tag)
+    );
+  }
+
+  if (/custom|build|workshop|shed/.test(text)) {
+    ["#CustomBuilds", "#ContainerBuilds", "#Workshop"].forEach((tag) => hashtags.add(tag));
+  }
+
+  if (/rental|rentals|rent/.test(text)) {
+    ["#ContainerRentals", "#StorageSolutions"].forEach((tag) => hashtags.add(tag));
+  }
+
+  const hookByTopic = (() => {
+    if (/cool|cooling|cool station|heat/.test(text)) {
+      return "Arizona heat is brutal. Give your crew a real place to cool down.";
+    }
+
+    if (/tack|tack room|horse|saddle|bridle/.test(text)) {
+      return "Need a tack room that can handle Arizona heat, dust, and ranch life?";
+    }
+
+    if (/mobile office|office/.test(text)) {
+      return "Need a real office on your jobsite instead of working out of a truck?";
+    }
+
+    if (/custom|build|workshop|shed/.test(text)) {
+      return "Shipping containers can be more than storage.";
+    }
+
+    if (/delivery|site prep|requirements/.test(text)) {
+      return "Getting a container delivered? Site prep matters.";
+    }
+
+    if (/rental|rentals|rent/.test(text)) {
+      return "Need temporary storage without buying a container outright?";
+    }
+
+    if (/sale|sales|buy|purchase/.test(text)) {
+      return "Looking for a new or used shipping container in Southern Arizona?";
+    }
+
+    return "Need rugged container storage or a custom container solution?";
+  })();
+
+  const shortCaption = [
+    hookByTopic,
+    "",
+    metaDescription || title,
+    "",
+    "Read the full article or request a quote:",
+    articleUrl,
+    "",
+    "Call Conex Creation & Supply at 520-253-3194."
+  ].join("\n");
+
+  const instagramCaption = [
+    hookByTopic,
+    "",
+    metaDescription || title,
+    "",
+    "Conex Creation & Supply serves Tucson, Willcox, Cochise County, Graham County, Santa Cruz County, Pima County, and Southern Arizona.",
+    "",
+    "Call 520-253-3194 for current availability, pricing, and delivery options.",
+    "",
+    [...hashtags].slice(0, 12).join(" ")
+  ].join("\n");
+
+  const facebookCaption = [
+    hookByTopic,
+    "",
+    metaDescription || title,
+    "",
+    "Read more:",
+    articleUrl,
+    "",
+    "Call 520-253-3194 for current availability, pricing, and delivery options.",
+    "",
+    [...hashtags].slice(0, 6).join(" ")
+  ].join("\n");
+
+  return {
+    enabled: true,
+    publishEnabled: process.env.SEO_SOCIAL_PUBLISH === "true",
+    platforms: (process.env.SEO_SOCIAL_PLATFORMS || "facebook,instagram")
+      .split(",")
+      .map((platform) => platform.trim().toLowerCase())
+      .filter(Boolean),
+    topicType,
+    articleUrl,
+    imageUrl: media?.url || "",
+    title,
+    metaDescription,
+    hashtags: [...hashtags],
+    preview: {
+      facebook: facebookCaption,
+      instagram: instagramCaption
+    },
+    publishPayload: {
+      platforms: (process.env.SEO_SOCIAL_PLATFORMS || "facebook,instagram")
+        .split(",")
+        .map((platform) => platform.trim().toLowerCase())
+        .filter(Boolean),
+      caption: shortCaption,
+      content: shortCaption,
+      message: shortCaption,
+      linkUrl: articleUrl,
+      url: articleUrl,
+      imageUrl: media?.url || "",
+      mediaUrl: media?.url || ""
+    }
+  };
+}
+
+async function maybePublishSocial(social) {
+  if (!social?.publishEnabled) {
+    return {
+      attempted: false,
+      reason: "SEO_SOCIAL_PUBLISH is not true. Social post preview generated only."
+    };
+  }
+
+  const appBaseUrl =
+    process.env.CONTENTFLOW_BASE_URL ||
+    process.env.PUBLIC_APP_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+
+  if (!appBaseUrl) {
+    return {
+      attempted: false,
+      error: "No ContentFlow app base URL configured. Set CONTENTFLOW_BASE_URL if you want automatic social publishing."
+    };
+  }
+
+  const response = await fetch(`${appBaseUrl}/api/publish-post`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(social.publishPayload)
+  });
+
+  const text = await response.text();
+
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = { raw: text };
+  }
+
+  if (!response.ok || body.ok === false) {
+    return {
+      attempted: true,
+      ok: false,
+      error: body.error || text
+    };
+  }
+
+  return {
+    attempted: true,
+    ok: true,
+    response: body
+  };
+}
+
 async function updateMediaAltText({ mediaId, altText }) {
   if (!mediaId || !altText) return null;
 
@@ -865,6 +1057,7 @@ module.exports = async function handler(req, res) {
     selectedMedia: null,
     mediaAltTextUpdate: null,
     taxonomies: null,
+    social: null,
     wordpressStatus: null,
     wordpressPostId: null,
     wordpressLink: null,
@@ -910,6 +1103,16 @@ module.exports = async function handler(req, res) {
     log.wordpressLink = wp.link;
     log.seoTitle = seo.seoTitle;
     log.metaDescription = seo.metaDescription;
+
+    const social = await generateSocialContent({
+      topic,
+      seo,
+      media,
+      wordpressLink: wp.link
+    });
+
+    social.publishResult = await maybePublishSocial(social);
+    log.social = social;
 
     return json(res, 200, log);
   } catch (error) {
