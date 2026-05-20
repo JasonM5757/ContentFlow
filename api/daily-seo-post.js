@@ -1,4 +1,4 @@
-const { getTodaysTopic } = require("./content-calendar");
+const { CONTENT_CALENDAR, getTodaysTopic } = require("./content-calendar");
 
 const DEFAULT_SOURCE_URL = "https://conexcreation.com";
 const CLAUDE_MODEL = "claude-sonnet-4-6";
@@ -22,6 +22,23 @@ function arizonaDateKey(date = new Date()) {
     month: "2-digit",
     day: "2-digit"
   }).format(date);
+}
+
+function getTopicForRequest(req, date = new Date()) {
+  const requestedDay =
+    typeof req.query?.day === "string" ? req.query.day.trim().toLowerCase() : "";
+
+  if (requestedDay) {
+    const matchedTopic = CONTENT_CALENDAR.find(
+      (item) => item.day.toLowerCase() === requestedDay
+    );
+
+    if (matchedTopic) {
+      return matchedTopic;
+    }
+  }
+
+  return getTodaysTopic(date);
 }
 
 function authHeader() {
@@ -107,8 +124,10 @@ function isUsableImageUrl(url) {
 
 function extractBestImageUrl(item) {
   const sizes = item?.media_details?.sizes;
+
   if (sizes && typeof sizes === "object") {
     const preferred = sizes.full || sizes.large || sizes.medium_large || sizes.medium;
+
     if (preferred?.source_url && isUsableImageUrl(preferred.source_url)) {
       return preferred.source_url;
     }
@@ -165,11 +184,15 @@ function topicKeywords(topic) {
   );
 
   if (/rental|rentals|rent/.test(base)) {
-    ["rental", "rentals", "storage", "container", "containers", "jobsite"].forEach((word) => keywords.add(word));
+    ["rental", "rentals", "storage", "container", "containers", "jobsite"].forEach(
+      (word) => keywords.add(word)
+    );
   }
 
   if (/cool|cooling|heat/.test(base)) {
-    ["cool", "cooling", "station", "heat", "air", "conditioned"].forEach((word) => keywords.add(word));
+    ["cool", "cooling", "station", "heat", "air", "conditioned"].forEach((word) =>
+      keywords.add(word)
+    );
   }
 
   if (/office/.test(base)) {
@@ -177,11 +200,15 @@ function topicKeywords(topic) {
   }
 
   if (/custom|build/.test(base)) {
-    ["custom", "build", "workshop", "tack", "shed", "container"].forEach((word) => keywords.add(word));
+    ["custom", "build", "workshop", "tack", "shed", "container"].forEach((word) =>
+      keywords.add(word)
+    );
   }
 
   if (/ranch|agriculture|farm/.test(base)) {
-    ["ranch", "farm", "tack", "storage", "agriculture"].forEach((word) => keywords.add(word));
+    ["ranch", "farm", "tack", "storage", "agriculture"].forEach((word) =>
+      keywords.add(word)
+    );
   }
 
   return [...keywords];
@@ -200,21 +227,54 @@ function scoreMediaForTopic(media, topic) {
     .toLowerCase();
 
   let score = 0;
-const topicText = [
-  topic.topicType,
-  topic.primaryKeyword,
-  topic.title,
-  topic.slugBase,
-  topic.audience
-].join(" ").toLowerCase();
 
-if (/cool|cooling|cool station|heat/.test(topicText)) {
-  if (haystack.includes("cool station")) score += 25;
-  if (haystack.includes("cool-station")) score += 25;
-  if (haystack.includes("cooling")) score += 15;
-  if (haystack.includes("heat")) score += 10;
-  if (haystack.includes("office")) score -= 20;
-}
+  const topicText = [
+    topic.topicType,
+    topic.primaryKeyword,
+    topic.title,
+    topic.slugBase,
+    topic.audience
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (/cool|cooling|cool station|heat/.test(topicText)) {
+    if (haystack.includes("cool station")) score += 25;
+    if (haystack.includes("cool-station")) score += 25;
+    if (haystack.includes("cooling")) score += 15;
+    if (haystack.includes("heat")) score += 10;
+    if (haystack.includes("office")) score -= 20;
+  }
+
+  if (/office|mobile office/.test(topicText)) {
+    if (haystack.includes("office")) score += 25;
+    if (haystack.includes("mobile office")) score += 25;
+    if (haystack.includes("office-rental")) score += 20;
+    if (haystack.includes("cool")) score -= 10;
+  }
+
+  if (/ranch|agriculture|farm|tack/.test(topicText)) {
+    if (haystack.includes("ranch")) score += 20;
+    if (haystack.includes("farm")) score += 15;
+    if (haystack.includes("tack")) score += 20;
+    if (haystack.includes("agriculture")) score += 15;
+  }
+
+  if (/custom|build|workshop|shed/.test(topicText)) {
+    if (haystack.includes("custom")) score += 20;
+    if (haystack.includes("build")) score += 15;
+    if (haystack.includes("workshop")) score += 20;
+    if (haystack.includes("shed")) score += 15;
+  }
+
+  if (/rental|rentals|storage/.test(topicText) && !/office|cool/.test(topicText)) {
+    if (haystack.includes("rental")) score += 20;
+    if (haystack.includes("container")) score += 15;
+    if (haystack.includes("storage")) score += 15;
+    if (haystack.includes("office")) score -= 10;
+    if (haystack.includes("cool")) score -= 10;
+  }
+
   for (const keyword of topicKeywords(topic)) {
     if (haystack.includes(keyword)) score += 1;
   }
@@ -275,7 +335,9 @@ async function selectFeaturedMedia(topic) {
     selected: best.media,
     available: mediaItems.length,
     score: best.score,
-    reason: best.score > 0 ? "Matched by topic keywords." : "No strong keyword match; selected first usable approved media."
+    reason: best.score > 0
+      ? "Matched by topic keywords."
+      : "No strong keyword match; selected first usable approved media."
   };
 }
 
@@ -288,6 +350,16 @@ function paragraphsToHtml(text) {
 
 function buildPostHtml(data, topic, media) {
   const intro = paragraphsToHtml(data.introduction || "");
+
+  const mediaBlock = media?.url
+    ? `
+<figure class="wp-block-image size-large">
+  <img src="${escapeHtml(media.url)}" alt="${escapeHtml(
+        data.imageAltText || media.altText || media.title || topic.title
+      )}" />
+</figure>
+`
+    : "";
 
   const body = Array.isArray(data.sections)
     ? data.sections
@@ -324,14 +396,6 @@ function buildPostHtml(data, topic, media) {
         .join("\n") +
       `</ul>`
     : "";
-
-  const mediaBlock = media?.url
-  ? `
-<figure class="wp-block-image size-large">
-  <img src="${escapeHtml(media.url)}" alt="${escapeHtml(data.imageAltText || media.altText || media.title || topic.title)}" />
-</figure>
-`
-  : "";
 
   return `
 <!-- Generated by ContentFlow SEO automation -->
@@ -543,7 +607,7 @@ module.exports = async function handler(req, res) {
 
   const startedAt = new Date();
   const dateKey = arizonaDateKey(startedAt);
-  const topic = getTodaysTopic(startedAt);
+  const topic = getTopicForRequest(req, startedAt);
 
   const log = {
     ok: false,
