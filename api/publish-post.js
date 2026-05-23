@@ -111,23 +111,21 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function publishFacebook({ token, pageId, message, linkUrl, imageUrl }) {
+async function publishFacebook({ token, pageId, message, linkUrl }) {
   if (!pageId) {
     throw new Error('FACEBOOK_PAGE_ID is not configured.');
   }
 
-  if (imageUrl) {
-    return graphRequest(`${pageId}/photos`, {
-      access_token: token,
-      url: imageUrl,
-      caption: message || '',
-      published: 'true'
-    });
-  }
-
+  /*
+    Important:
+    We intentionally publish Facebook as a normal Page feed post.
+    Do not use /photos for SEO blog promotion posts, because visitors may only see
+    the uploaded image in the Photos area instead of seeing a normal Page post.
+  */
   return graphRequest(`${pageId}/feed`, {
     access_token: token,
     message: message || '',
+    published: 'true',
     ...(linkUrl ? { link: linkUrl } : {})
   });
 }
@@ -223,6 +221,7 @@ module.exports = async function handler(req, res) {
   }
 
   const platforms = normalizePlatforms(body);
+
   const content =
     body.content ||
     body.formattedPost ||
@@ -245,15 +244,15 @@ module.exports = async function handler(req, res) {
           token,
           pageId,
           message: content,
-          linkUrl,
-          imageUrl: imageUrl || ''
+          linkUrl
         });
 
         results.push({
           platform: 'facebook',
           status: scheduledAt ? 'prepared' : 'published',
           remoteId: result.id || result.post_id || '',
-          response: result
+          response: result,
+          method: 'page_feed_post'
         });
       }
 
@@ -270,7 +269,8 @@ module.exports = async function handler(req, res) {
           platform: 'instagram',
           status: scheduledAt ? 'prepared' : 'published',
           remoteId: result.id || '',
-          response: result
+          response: result,
+          method: imageUrl ? 'instagram_image_post' : 'instagram_reel_post'
         });
       }
     }
