@@ -115,6 +115,13 @@ function isAllowedFullSizeJpg(url) {
   if (looksLikeWordPressThumbnail(url)) return false;
   if (looksLikeIcon(url)) return false;
 
+  // Reject known wide/banner/logo/sticker-style images that Instagram may reject.
+  // Instagram feed images must be within supported aspect-ratio limits, so these
+  // marketing graphics should not be used for automated Instagram posts.
+  if (/(sticker|stickers|banner|wide|logo|cover|flyer|graphic)/i.test(url)) {
+    return false;
+  }
+
   // Explicitly reject non-JPG formats and document types just in case.
   if (/\.(png|svg|webp|gif|bmp|tiff|pdf|mp4|mov|webm)(\?|$)/i.test(url)) {
     return false;
