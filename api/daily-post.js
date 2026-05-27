@@ -840,8 +840,21 @@ module.exports = async function handler(req, res) {
       instagram: log.instagram
     });
 
-    log.ok = log.errors.length === 0 || Boolean(log.facebook) || Boolean(log.instagram);
-    return json(res, log.ok ? 200 : 500, log);
+   log.ok = log.errors.length === 0 || Boolean(log.facebook) || Boolean(log.instagram);
+
+console.log(JSON.stringify({
+  route: "daily-post",
+  ok: log.ok,
+  date: log.arizonaDate,
+  mediaUrl: log.mediaUrl,
+  mediaSource: log.mediaSource,
+  mediaTitle: log.mediaTitle,
+  facebook: log.facebook,
+  instagram: log.instagram,
+  errors: log.errors
+}));
+
+return json(res, log.ok ? 200 : 500, log);
   } catch (error) {
     log.errors.push(`Unhandled error: ${error.message}`);
     return json(res, 500, log);
