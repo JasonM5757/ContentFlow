@@ -193,52 +193,71 @@ async function getDailyMediaRotationPool(items) {
   }
 }
 
-async function markDailyMediaUsed({ mediaSelection, dateKey, facebook, instagram }) {
-  if (!mediaSelection?.mediaId) {
-    return { ok: true, skipped: true, reason: "No media ID to mark used." };
+async function markDailyMediaUsed({
+  mediaSelection,
+  mediaSelections,
+  dateKey,
+  facebook,
+  instagram
+}) {
+  const selections = Array.isArray(mediaSelections) && mediaSelections.length
+    ? mediaSelections
+    : mediaSelection
+      ? [mediaSelection]
+      : [];
+
+  const validSelections = selections.filter(
+    (selection) => selection?.mediaId && selection?.rotationCycleNumber
+  );
+
+  if (!validSelections.length) {
+    return { ok: true, skipped: true, reason: "No media IDs to mark used." };
   }
 
-  if (!dailyRedisIsConfigured() || !mediaSelection.rotationCycleNumber) {
+  if (!dailyRedisIsConfigured()) {
     return {
       ok: false,
       skipped: true,
-      reason: "Redis is not configured or daily media cycle number is missing.",
+      reason: "Redis is not configured."
     };
   }
 
   try {
     const usedAt = new Date().toISOString();
 
-    await dailyRedisCommand(
-      "SADD",
-      dailyMediaUsedSetKey(mediaSelection.rotationCycleNumber),
-      String(mediaSelection.mediaId)
-    );
+    for (const selection of validSelections) {
+      await dailyRedisCommand(
+        "SADD",
+        dailyMediaUsedSetKey(selection.rotationCycleNumber),
+        String(selection.mediaId)
+      );
 
-    await dailyRedisCommand(
-      "LPUSH",
-      DAILY_MEDIA_USAGE_LOG_KEY,
-      JSON.stringify({
-        media_id: String(mediaSelection.mediaId),
-        media_url: mediaSelection.mediaUrl || "",
-        title: mediaSelection.mediaTitle || "",
-        content_group: getDailyContentGroupFromSelection(mediaSelection),
-        cycle_number: mediaSelection.rotationCycleNumber,
-        used_at: usedAt,
-        date_key: dateKey,
-        facebook_id: facebook?.id || facebook?.post_id || "",
-        instagram_id: instagram?.id || "",
-      })
-    );
+      await dailyRedisCommand(
+        "LPUSH",
+        DAILY_MEDIA_USAGE_LOG_KEY,
+        JSON.stringify({
+          media_id: String(selection.mediaId),
+          media_url: selection.mediaUrl || "",
+          title: selection.mediaTitle || "",
+          content_group: getDailyContentGroupFromSelection(selection),
+          cycle_number: selection.rotationCycleNumber,
+          used_at: usedAt,
+          date_key: dateKey,
+          facebook_id: facebook?.id || facebook?.post_id || "",
+          instagram_id: instagram?.id || "",
+        })
+      );
+    }
 
     return {
       ok: true,
-      markedUsed: 1,
-      cycleNumber: mediaSelection.rotationCycleNumber,
+      markedUsed: validSelections.length,
+      cycleNumber: validSelections[0].rotationCycleNumber,
     };
   } catch (error) {
     return { ok: false, error: error.message };
   }
+}
 }
 function arizonaDateKey(date = new Date()) {
   // Arizona does not observe DST. Treat as fixed UTC-7.
@@ -510,7 +529,55 @@ function buildSelection(item, source, available, fallbackUsed, error = null, rot
     rotationError: rotation.rotationError || null,
   };
 }
+function buildDailyMediaBundle({
+  primarySelection,
+  candidateItems,
+  source,
+  available,
+  fallbackUsed,
+  error,
+  rotation,
+  maxItems = 5
+}) {
+  if (!primarySelection?.mediaUrl) return [];
 
+  const primaryGroup = getDailyContentGroupFromSelection(primarySelection);
+
+  if (!primaryGroup) {
+    return [primarySelection];
+  }
+
+  const usedKeys = new Set([
+    String(primarySelection.mediaId || ""),
+    String(primarySelection.mediaUrl || "")
+  ]);
+
+  const relatedSelections = candidateItems
+    .filter((item) => item?.url)
+    .filter((item) => {
+      const itemId = String(item.id || "");
+      const itemUrl = String(item.url || "");
+      return !usedKeys.has(itemId) && !usedKeys.has(itemUrl);
+    })
+    .map((item) =>
+      buildSelection(
+        item,
+        source,
+        available,
+        fallbackUsed,
+        error,
+        rotation
+      )
+    )
+    .filter((selection) => {
+      if (!selection?.mediaUrl) return false;
+      if (!isAllowedFullSizeJpg(selection.mediaUrl)) return false;
+      return getDailyContentGroupFromSelection(selection) === primaryGroup;
+    })
+    .slice(0, Math.max(0, maxItems - 1));
+
+  return [primarySelection, ...relatedSelections];
+}
 async function pickDailyMedia(dateKey) {
   // 1) Try the WordPress Media Library first.
   try {
@@ -522,16 +589,29 @@ async function pickDailyMedia(dateKey) {
 
       const selected = rotateByDate(candidateItems, dateKey);
 
-      if (selected && isAllowedFullSizeJpg(selected.url)) {
-        return buildSelection(
-          selected,
-          cached ? "wordpress-cache" : "wordpress",
-          items.length,
-          false,
-          rotation.rotationError || null,
-          rotation
-        );
-      }
+     if (selected && isAllowedFullSizeJpg(selected.url)) {
+  const primarySelection = buildSelection(
+    selected,
+    cached ? "wordpress-cache" : "wordpress",
+    items.length,
+    false,
+    rotation.rotationError || null,
+    rotation
+  );
+
+  primarySelection.mediaBundle = buildDailyMediaBundle({
+    primarySelection,
+    candidateItems,
+    source: cached ? "wordpress-cache" : "wordpress",
+    available: items.length,
+    fallbackUsed: false,
+    error: rotation.rotationError || null,
+    rotation,
+    maxItems: 5
+  });
+
+  return primarySelection;
+}
     }
 
     // No valid JPGs returned — fall through to fallback.
@@ -555,13 +635,17 @@ async function pickDailyMedia(dateKey) {
 
   const selected = rotateByDate(fallback, dateKey);
 
-  return buildSelection(
-    selected,
-    "fallback",
-    fallback.length,
-    true,
-    WP_MEDIA_CACHE.lastError || null
-  );
+const primarySelection = buildSelection(
+  selected,
+  "fallback",
+  fallback.length,
+  true,
+  WP_MEDIA_CACHE.lastError || null
+);
+
+primarySelection.mediaBundle = [primarySelection];
+
+return primarySelection;
 }
 
 async function scrapeSourceWebsite(url) {
@@ -837,7 +921,59 @@ async function publishToFacebook({ token, pageId, caption, imageUrl, linkUrl }) 
     ...(linkUrl ? { link: linkUrl } : {})
   });
 }
+async function publishToFacebookMultiPhoto({
+  token,
+  pageId,
+  caption,
+  imageUrls
+}) {
+  if (!pageId) throw new Error("FACEBOOK_PAGE_ID is not configured.");
 
+  const urls = Array.isArray(imageUrls)
+    ? imageUrls.filter(Boolean).slice(0, 10)
+    : [];
+
+  if (urls.length <= 1) {
+    return publishToFacebook({
+      token,
+      pageId,
+      caption,
+      imageUrl: urls[0] || "",
+      linkUrl: DEFAULT_SOURCE_URL
+    });
+  }
+
+  const uploadedPhotoIds = [];
+
+  for (const imageUrl of urls) {
+    const uploaded = await graphRequest(`${pageId}/photos`, {
+      access_token: token,
+      url: imageUrl,
+      published: "false"
+    });
+
+    if (uploaded?.id) {
+      uploadedPhotoIds.push(uploaded.id);
+    }
+  }
+
+  if (!uploadedPhotoIds.length) {
+    throw new Error("Facebook multi-photo upload did not return any photo IDs.");
+  }
+
+  const params = {
+    access_token: token,
+    message: caption || ""
+  };
+
+  uploadedPhotoIds.forEach((photoId, index) => {
+    params[`attached_media[${index}]`] = JSON.stringify({
+      media_fbid: photoId
+    });
+  });
+
+  return graphRequest(`${pageId}/feed`, params);
+}
 async function publishToInstagram({ token, igId, caption, imageUrl }) {
   if (!igId) throw new Error("INSTAGRAM_BUSINESS_ACCOUNT_ID is not configured.");
   if (!imageUrl) {
@@ -863,7 +999,73 @@ async function publishToInstagram({ token, igId, caption, imageUrl }) {
     creation_id: creation.id
   });
 }
+async function publishToInstagramCarousel({
+  token,
+  igId,
+  caption,
+  imageUrls
+}) {
+  if (!igId) throw new Error("INSTAGRAM_BUSINESS_ACCOUNT_ID is not configured.");
 
+  const urls = Array.isArray(imageUrls)
+    ? imageUrls.filter((url) => isValidJpgUrl(url)).slice(0, 10)
+    : [];
+
+  if (!urls.length) {
+    throw new Error("Instagram publishing requires at least one valid JPG imageUrl.");
+  }
+
+  if (urls.length === 1) {
+    return publishToInstagram({
+      token,
+      igId,
+      caption,
+      imageUrl: urls[0]
+    });
+  }
+
+  const childIds = [];
+
+  for (const imageUrl of urls) {
+    const child = await graphRequest(`${igId}/media`, {
+      access_token: token,
+      image_url: imageUrl,
+      is_carousel_item: "true"
+    });
+
+    if (!child?.id) {
+      throw new Error("Instagram carousel child container did not return an id.");
+    }
+
+    await waitForInstagramContainerReady({
+      token,
+      creationId: child.id
+    });
+
+    childIds.push(child.id);
+  }
+
+  const parent = await graphRequest(`${igId}/media`, {
+    access_token: token,
+    media_type: "CAROUSEL",
+    children: childIds.join(","),
+    caption: caption || ""
+  });
+
+  if (!parent?.id) {
+    throw new Error("Instagram carousel parent container did not return an id.");
+  }
+
+  await waitForInstagramContainerReady({
+    token,
+    creationId: parent.id
+  });
+
+  return graphRequest(`${igId}/media_publish`, {
+    access_token: token,
+    creation_id: parent.id
+  });
+}
 function buildSignature({ dateKey, mediaUrl, caption }) {
   return hashSignature(`${dateKey}::${mediaUrl}::${caption.slice(0, 400)}`);
 }
@@ -963,6 +1165,24 @@ module.exports = async function handler(req, res) {
     }
 
     const mediaUrl = mediaSelection.mediaUrl;
+    const mediaBundle = Array.isArray(mediaSelection.mediaBundle) &&
+  mediaSelection.mediaBundle.length
+  ? mediaSelection.mediaBundle
+  : [mediaSelection];
+
+const mediaUrls = mediaBundle
+  .map((item) => item.mediaUrl)
+  .filter((url) => isValidJpgUrl(url))
+  .slice(0, 10);
+
+log.mediaBundle = mediaBundle.map((item) => ({
+  mediaId: item.mediaId,
+  mediaUrl: item.mediaUrl,
+  mediaTitle: item.mediaTitle,
+  contentGroup: getDailyContentGroupFromSelection(item)
+}));
+
+log.mediaBundleCount = mediaUrls.length;
     log.mediaUrl = mediaUrl;
     log.mediaTitle = mediaSelection.mediaTitle || null;
     log.mediaAltText = mediaSelection.mediaAltText || null;
@@ -1041,24 +1261,23 @@ module.exports = async function handler(req, res) {
 
     // 5. Publish to Facebook.
     try {
-      log.facebook = await publishToFacebook({
-        token,
-        pageId,
-        caption: claude.caption,
-        imageUrl: mediaUrl,
-        linkUrl: DEFAULT_SOURCE_URL
-      });
+      log.facebook = await publishToFacebookMultiPhoto({
+  token,
+  pageId,
+  caption: claude.caption,
+  imageUrls: mediaUrls
+});
     } catch (error) {
       log.errors.push(`Facebook publish failed: ${error.message}`);
     }
-// 6. Publish to Instagram — only if JPG is valid.
+// 6. Publish to Instagram — carousel if grouped images are available.
 try {
-  if (isValidJpgUrl(mediaUrl)) {
-    log.instagram = await publishToInstagram({
+  if (mediaUrls.length) {
+    log.instagram = await publishToInstagramCarousel({
       token,
       igId,
       caption: claude.caption,
-      imageUrl: mediaUrl
+      imageUrls: mediaUrls
     });
   } else {
     log.errors.push("Skipped Instagram: no valid JPG imageUrl available.");
@@ -1069,11 +1288,12 @@ try {
 
 if (log.facebook || log.instagram) {
   log.mediaUsage = await markDailyMediaUsed({
-    mediaSelection,
-    dateKey,
-    facebook: log.facebook,
-    instagram: log.instagram
-  });
+  mediaSelection,
+  mediaSelections: mediaBundle,
+  dateKey,
+  facebook: log.facebook,
+  instagram: log.instagram
+});
 } else {
   log.mediaUsage = {
     ok: false,
