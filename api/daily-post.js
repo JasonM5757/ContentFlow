@@ -244,7 +244,7 @@ async function markDailyMediaUsed({
           used_at: usedAt,
           date_key: dateKey,
           facebook_id: facebook?.id || facebook?.post_id || "",
-          instagram_id: instagram?.id || "",
+          instagram_id: instagram?.id || ""
         })
       );
     }
@@ -252,12 +252,11 @@ async function markDailyMediaUsed({
     return {
       ok: true,
       markedUsed: validSelections.length,
-      cycleNumber: validSelections[0].rotationCycleNumber,
+      cycleNumber: validSelections[0].rotationCycleNumber
     };
   } catch (error) {
     return { ok: false, error: error.message };
   }
-}
 }
 function arizonaDateKey(date = new Date()) {
   // Arizona does not observe DST. Treat as fixed UTC-7.
