@@ -1051,35 +1051,34 @@ module.exports = async function handler(req, res) {
     } catch (error) {
       log.errors.push(`Facebook publish failed: ${error.message}`);
     }
-
-    // 6. Publish to Instagram — only if JPG is valid (already enforced above).
-    try {
-      if (isValidJpgUrl(mediaUrl)) {
-        log.instagram = await publishToInstagram({
-          token,
-          igId,
-          caption: claude.caption,
-          imageUrl: mediaUrl
-        });
-      } else {
-        log.errors.push("Skipped Instagram: no valid JPG imageUrl available.");
-      }
-    } catch (error) {
-      log.errors.push(`Instagram publish failed: ${error.message}`);
-    }
+// 6. Publish to Instagram — only if JPG is valid.
+try {
+  if (isValidJpgUrl(mediaUrl)) {
+    log.instagram = await publishToInstagram({
+      token,
+      igId,
+      caption: claude.caption,
+      imageUrl: mediaUrl
+    });
+  } else {
+    log.errors.push("Skipped Instagram: no valid JPG imageUrl available.");
+  }
+} catch (error) {
+  log.errors.push(`Instagram publish failed: ${error.message}`);
 }
-    if (log.facebook || log.instagram) {
+
+if (log.facebook || log.instagram) {
   log.mediaUsage = await markDailyMediaUsed({
     mediaSelection,
     dateKey,
     facebook: log.facebook,
-    instagram: log.instagram,
+    instagram: log.instagram
   });
 } else {
   log.mediaUsage = {
     ok: false,
     skipped: true,
-    reason: "No platform publish succeeded; media was not marked used.",
+    reason: "No platform publish succeeded; media was not marked used."
   };
 }
     // 7. Record this run for duplicate protection.
