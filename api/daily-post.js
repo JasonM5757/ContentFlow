@@ -38,7 +38,208 @@ globalThis.__CONTENTFLOW_WP_MEDIA_CACHE__ = WP_MEDIA_CACHE;
 // Lightweight in-memory duplicate protection per warm serverless instance.
 const RECENT_RUNS = globalThis.__CONTENTFLOW_DAILY_RUNS__ || new Map();
 globalThis.__CONTENTFLOW_DAILY_RUNS__ = RECENT_RUNS;
+const DAILY_REDIS_REST_URL =
+  process.env.UPSTASH_REDIS_REST_KV_REST_API_URL ||
+  process.env.UPSTASH_REDIS_REST_URL;
 
+const DAILY_REDIS_REST_TOKEN =
+  process.env.UPSTASH_REDIS_REST_KV_REST_API_TOKEN ||
+  process.env.UPSTASH_REDIS_REST_TOKEN;
+
+const DAILY_MEDIA_ROTATION_CYCLE_KEY = "contentflow:daily:media:rotationCycle";
+const DAILY_MEDIA_USAGE_LOG_KEY = "contentflow:daily:media:usageLog";
+
+function dailyRedisIsConfigured() {
+  return Boolean(DAILY_REDIS_REST_URL && DAILY_REDIS_REST_TOKEN);
+}
+
+async function dailyRedisCommand(command, ...args) {
+  if (!dailyRedisIsConfigured()) return null;
+
+  const response = await fetch(DAILY_REDIS_REST_URL.replace(/\/+$/, ""), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${DAILY_REDIS_REST_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify([command, ...args]),
+  });
+
+  const text = await response.text();
+
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(`Redis returned non-JSON response: ${text.slice(0, 200)}`);
+  }
+
+  if (!response.ok || payload?.error) {
+    throw new Error(
+      `Redis command failed: ${payload?.error || text.slice(0, 200)}`
+    );
+  }
+
+  return payload.result;
+}
+
+function dailyMediaUsedSetKey(cycleNumber) {
+  return `contentflow:daily:media:used:cycle:${cycleNumber}`;
+}
+
+function dailyMediaId(item) {
+  if (!item || item.id === null || item.id === undefined) return "";
+  return String(item.id);
+}
+
+function getDailyContentGroupFromSelection(selection) {
+  const text = [
+    selection?.mediaTitle,
+    selection?.mediaAltText,
+    selection?.mediaCaption,
+    selection?.mediaDescription,
+    selection?.mediaSlug,
+    selection?.mediaUrl,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const match = text.match(/Content group:\s*([a-zA-Z0-9_-]+)/i);
+  return match ? match[1].trim() : "";
+}
+
+async function getDailyMediaRotationPool(items) {
+  const eligibleMedia = Array.isArray(items)
+    ? items.filter((item) => dailyMediaId(item) && item.url)
+    : [];
+
+  if (!eligibleMedia.length) {
+    return {
+      trackingEnabled: dailyRedisIsConfigured(),
+      cycleNumber: 0,
+      mediaItems: [],
+      usedCount: 0,
+      unusedAvailable: 0,
+      startedNewCycle: false,
+      rotationError: null,
+    };
+  }
+
+  if (!dailyRedisIsConfigured()) {
+    return {
+      trackingEnabled: false,
+      cycleNumber: 0,
+      mediaItems: eligibleMedia,
+      usedCount: 0,
+      unusedAvailable: eligibleMedia.length,
+      startedNewCycle: false,
+      rotationError: "Redis is not configured; using normal daily media rotation.",
+    };
+  }
+
+  try {
+    let cycleNumber = Number(
+      await dailyRedisCommand("GET", DAILY_MEDIA_ROTATION_CYCLE_KEY)
+    );
+
+    if (!Number.isFinite(cycleNumber) || cycleNumber < 1) {
+      cycleNumber = 1;
+      await dailyRedisCommand("SET", DAILY_MEDIA_ROTATION_CYCLE_KEY, String(cycleNumber));
+    }
+
+    const usedIdsRaw =
+      (await dailyRedisCommand("SMEMBERS", dailyMediaUsedSetKey(cycleNumber))) || [];
+
+    const usedIds = new Set(usedIdsRaw.map(String));
+
+    let unusedMedia = eligibleMedia.filter(
+      (item) => !usedIds.has(dailyMediaId(item))
+    );
+
+    if (!unusedMedia.length) {
+      cycleNumber += 1;
+      await dailyRedisCommand("SET", DAILY_MEDIA_ROTATION_CYCLE_KEY, String(cycleNumber));
+
+      return {
+        trackingEnabled: true,
+        cycleNumber,
+        mediaItems: eligibleMedia,
+        usedCount: 0,
+        unusedAvailable: eligibleMedia.length,
+        startedNewCycle: true,
+        rotationError: null,
+      };
+    }
+
+    return {
+      trackingEnabled: true,
+      cycleNumber,
+      mediaItems: unusedMedia,
+      usedCount: usedIds.size,
+      unusedAvailable: unusedMedia.length,
+      startedNewCycle: false,
+      rotationError: null,
+    };
+  } catch (error) {
+    return {
+      trackingEnabled: false,
+      cycleNumber: 0,
+      mediaItems: eligibleMedia,
+      usedCount: 0,
+      unusedAvailable: eligibleMedia.length,
+      startedNewCycle: false,
+      rotationError: error.message,
+    };
+  }
+}
+
+async function markDailyMediaUsed({ mediaSelection, dateKey, facebook, instagram }) {
+  if (!mediaSelection?.mediaId) {
+    return { ok: true, skipped: true, reason: "No media ID to mark used." };
+  }
+
+  if (!dailyRedisIsConfigured() || !mediaSelection.rotationCycleNumber) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "Redis is not configured or daily media cycle number is missing.",
+    };
+  }
+
+  try {
+    const usedAt = new Date().toISOString();
+
+    await dailyRedisCommand(
+      "SADD",
+      dailyMediaUsedSetKey(mediaSelection.rotationCycleNumber),
+      String(mediaSelection.mediaId)
+    );
+
+    await dailyRedisCommand(
+      "LPUSH",
+      DAILY_MEDIA_USAGE_LOG_KEY,
+      JSON.stringify({
+        media_id: String(mediaSelection.mediaId),
+        media_url: mediaSelection.mediaUrl || "",
+        title: mediaSelection.mediaTitle || "",
+        content_group: getDailyContentGroupFromSelection(mediaSelection),
+        cycle_number: mediaSelection.rotationCycleNumber,
+        used_at: usedAt,
+        date_key: dateKey,
+        facebook_id: facebook?.id || facebook?.post_id || "",
+        instagram_id: instagram?.id || "",
+      })
+    );
+
+    return {
+      ok: true,
+      markedUsed: 1,
+      cycleNumber: mediaSelection.rotationCycleNumber,
+    };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
 function arizonaDateKey(date = new Date()) {
   // Arizona does not observe DST. Treat as fixed UTC-7.
   const formatter = new Intl.DateTimeFormat("en-CA", {
@@ -192,7 +393,7 @@ function buildMediaObject(item) {
   const title = cleanMediaText(pickRenderedOrRaw(item.title), 200);
   const altText = cleanMediaText(item.alt_text, 300);
   const caption = cleanMediaText(pickRenderedOrRaw(item.caption), 600);
-  const description = cleanMediaText(pickRenderedOrRaw(item.description), 800);
+  const description = cleanMediaText(pickRenderedOrRaw(item.description), 2000);
   const slug = typeof item.slug === "string" ? item.slug : "";
   const id = item.id ?? null;
 
@@ -284,7 +485,7 @@ function rotateByDate(list, dateKey) {
   return list[index];
 }
 
-function buildSelection(item, source, available, fallbackUsed, error = null) {
+function buildSelection(item, source, available, fallbackUsed, error = null, rotation = {}) {
   return {
     mediaUrl: item?.url || null,
     mediaTitle: item?.title || "",
@@ -296,7 +497,17 @@ function buildSelection(item, source, available, fallbackUsed, error = null) {
     source,
     available,
     fallbackUsed,
-    error
+    error,
+
+    rotationTrackingEnabled: Boolean(rotation.trackingEnabled),
+    rotationCycleNumber: rotation.cycleNumber || 0,
+    rotationUsedCount: rotation.usedCount || 0,
+    rotationUnusedAvailable:
+      rotation.unusedAvailable === 0 || rotation.unusedAvailable
+        ? rotation.unusedAvailable
+        : available,
+    rotationStartedNewCycle: Boolean(rotation.startedNewCycle),
+    rotationError: rotation.rotationError || null,
   };
 }
 
@@ -304,17 +515,25 @@ async function pickDailyMedia(dateKey) {
   // 1) Try the WordPress Media Library first.
   try {
     const { items, cached } = await fetchWordPressMediaLibrary();
+
     if (items.length) {
-      const selected = rotateByDate(items, dateKey);
+      const rotation = await getDailyMediaRotationPool(items);
+      const candidateItems = rotation.mediaItems.length ? rotation.mediaItems : items;
+
+      const selected = rotateByDate(candidateItems, dateKey);
+
       if (selected && isAllowedFullSizeJpg(selected.url)) {
         return buildSelection(
           selected,
           cached ? "wordpress-cache" : "wordpress",
           items.length,
-          false
+          false,
+          rotation.rotationError || null,
+          rotation
         );
       }
     }
+
     // No valid JPGs returned — fall through to fallback.
   } catch (error) {
     // Swallow and fall back to the local array, but include the error in logs.
@@ -323,6 +542,7 @@ async function pickDailyMedia(dateKey) {
 
   // 2) Fall back to the hardcoded APPROVED_MEDIA_LIBRARY.
   const fallback = APPROVED_MEDIA_LIBRARY.filter((entry) => isJpgUrl(entry?.url));
+
   if (!fallback.length) {
     return buildSelection(
       null,
@@ -334,6 +554,7 @@ async function pickDailyMedia(dateKey) {
   }
 
   const selected = rotateByDate(fallback, dateKey);
+
   return buildSelection(
     selected,
     "fallback",
@@ -721,6 +942,14 @@ module.exports = async function handler(req, res) {
     log.mediaSource = mediaSelection.source;
     log.mediaAvailable = mediaSelection.available;
     log.mediaFallbackUsed = mediaSelection.fallbackUsed;
+    log.mediaRotation = {
+  trackingEnabled: mediaSelection.rotationTrackingEnabled,
+  cycleNumber: mediaSelection.rotationCycleNumber,
+  usedCount: mediaSelection.rotationUsedCount,
+  unusedAvailable: mediaSelection.rotationUnusedAvailable,
+  startedNewCycle: mediaSelection.rotationStartedNewCycle,
+  rotationError: mediaSelection.rotationError || null,
+};
     if (mediaSelection.error) {
       log.mediaError = mediaSelection.error;
       log.errors.push(`Media library: ${mediaSelection.error}`);
@@ -838,7 +1067,21 @@ module.exports = async function handler(req, res) {
     } catch (error) {
       log.errors.push(`Instagram publish failed: ${error.message}`);
     }
-
+}
+    if (log.facebook || log.instagram) {
+  log.mediaUsage = await markDailyMediaUsed({
+    mediaSelection,
+    dateKey,
+    facebook: log.facebook,
+    instagram: log.instagram,
+  });
+} else {
+  log.mediaUsage = {
+    ok: false,
+    skipped: true,
+    reason: "No platform publish succeeded; media was not marked used.",
+  };
+}
     // 7. Record this run for duplicate protection.
     RECENT_RUNS.set(dedupeKey, {
       timestamp: Date.now(),
