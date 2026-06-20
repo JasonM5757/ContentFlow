@@ -3,7 +3,205 @@ const { CONTENT_CALENDAR, getTodaysTopic } = require("./content-calendar");
 const DEFAULT_SOURCE_URL = "https://conexcreation.com";
 const CLAUDE_MODEL = "claude-sonnet-4-6";
 const WORDPRESS_MEDIA_ENDPOINT = `${DEFAULT_SOURCE_URL}/wp-json/wp/v2/media?per_page=100&media_type=image`;
+const REDIS_REST_URL =
+  process.env.UPSTASH_REDIS_REST_KV_REST_API_URL ||
+  process.env.UPSTASH_REDIS_REST_URL;
 
+const REDIS_REST_TOKEN =
+  process.env.UPSTASH_REDIS_REST_KV_REST_API_TOKEN ||
+  process.env.UPSTASH_REDIS_REST_TOKEN;
+
+const MEDIA_ROTATION_CYCLE_KEY = "contentflow:seo:media:rotationCycle";
+const MEDIA_USAGE_LOG_KEY = "contentflow:seo:media:usageLog";
+
+function redisIsConfigured() {
+  return Boolean(REDIS_REST_URL && REDIS_REST_TOKEN);
+}
+
+async function redisCommand(command, ...args) {
+  if (!redisIsConfigured()) return null;
+
+  const response = await fetch(REDIS_REST_URL.replace(/\/+$/, ""), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${REDIS_REST_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify([command, ...args]),
+  });
+
+  const text = await response.text();
+
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(`Redis returned non-JSON response: ${text.slice(0, 200)}`);
+  }
+
+  if (!response.ok || payload?.error) {
+    throw new Error(
+      `Redis command failed: ${payload?.error || text.slice(0, 200)}`
+    );
+  }
+
+  return payload.result;
+}
+
+function mediaUsedSetKey(cycleNumber) {
+  return `contentflow:seo:media:used:cycle:${cycleNumber}`;
+}
+
+function mediaId(media) {
+  if (!media || media.id === null || media.id === undefined) return "";
+  return String(media.id);
+}
+
+function getContentGroupFromMedia(media) {
+  const text = [
+    media?.title,
+    media?.altText,
+    media?.caption,
+    media?.description,
+    media?.slug,
+    media?.url,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const match = text.match(/Content group:\s*([a-zA-Z0-9_-]+)/i);
+  return match ? match[1].trim() : "";
+}
+
+async function getMediaRotationPool(mediaItems) {
+  const eligibleMedia = Array.isArray(mediaItems)
+    ? mediaItems.filter((item) => mediaId(item) && item.url)
+    : [];
+
+  if (!eligibleMedia.length) {
+    return {
+      trackingEnabled: redisIsConfigured(),
+      cycleNumber: 0,
+      mediaItems: [],
+      usedCount: 0,
+      unusedAvailable: 0,
+      startedNewCycle: false,
+      rotationError: null,
+    };
+  }
+
+  if (!redisIsConfigured()) {
+    return {
+      trackingEnabled: false,
+      cycleNumber: 0,
+      mediaItems: eligibleMedia,
+      usedCount: 0,
+      unusedAvailable: eligibleMedia.length,
+      startedNewCycle: false,
+      rotationError: "Redis is not configured; using normal media selection.",
+    };
+  }
+
+  try {
+    let cycleNumber = Number(await redisCommand("GET", MEDIA_ROTATION_CYCLE_KEY));
+
+    if (!Number.isFinite(cycleNumber) || cycleNumber < 1) {
+      cycleNumber = 1;
+      await redisCommand("SET", MEDIA_ROTATION_CYCLE_KEY, String(cycleNumber));
+    }
+
+    const usedIdsRaw =
+      (await redisCommand("SMEMBERS", mediaUsedSetKey(cycleNumber))) || [];
+
+    const usedIds = new Set(usedIdsRaw.map(String));
+
+    let unusedMedia = eligibleMedia.filter(
+      (item) => !usedIds.has(mediaId(item))
+    );
+
+    if (!unusedMedia.length) {
+      cycleNumber += 1;
+      await redisCommand("SET", MEDIA_ROTATION_CYCLE_KEY, String(cycleNumber));
+
+      return {
+        trackingEnabled: true,
+        cycleNumber,
+        mediaItems: eligibleMedia,
+        usedCount: 0,
+        unusedAvailable: eligibleMedia.length,
+        startedNewCycle: true,
+        rotationError: null,
+      };
+    }
+
+    return {
+      trackingEnabled: true,
+      cycleNumber,
+      mediaItems: unusedMedia,
+      usedCount: usedIds.size,
+      unusedAvailable: unusedMedia.length,
+      startedNewCycle: false,
+      rotationError: null,
+    };
+  } catch (error) {
+    return {
+      trackingEnabled: false,
+      cycleNumber: 0,
+      mediaItems: eligibleMedia,
+      usedCount: 0,
+      unusedAvailable: eligibleMedia.length,
+      startedNewCycle: false,
+      rotationError: error.message,
+    };
+  }
+}
+
+async function markMediaUsed({ mediaItems, cycleNumber, topic, postUrl }) {
+  const items = Array.isArray(mediaItems)
+    ? mediaItems.filter((item) => mediaId(item))
+    : [];
+
+  if (!items.length) {
+    return { ok: true, skipped: true, reason: "No media items to mark used." };
+  }
+
+  if (!redisIsConfigured() || !cycleNumber) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "Redis is not configured or cycle number is missing.",
+    };
+  }
+
+  try {
+    const usedAt = new Date().toISOString();
+
+    for (const media of items) {
+      const id = mediaId(media);
+
+      await redisCommand("SADD", mediaUsedSetKey(cycleNumber), id);
+
+      await redisCommand(
+        "LPUSH",
+        MEDIA_USAGE_LOG_KEY,
+        JSON.stringify({
+          media_id: id,
+          media_url: media.url || "",
+          title: media.title || "",
+          content_group: getContentGroupFromMedia(media),
+          cycle_number: cycleNumber,
+          used_at: usedAt,
+          post_topic: topic?.title || topic?.primaryKeyword || "",
+          post_url: postUrl || "",
+        })
+      );
+    }
+
+    return { ok: true, markedUsed: items.length, cycleNumber };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,GET,OPTIONS");
@@ -164,7 +362,7 @@ function mediaObjectFromWp(item) {
     title: cleanMediaText(pickRenderedOrRaw(item.title), 200),
     altText: cleanMediaText(item.alt_text, 300),
     caption: cleanMediaText(pickRenderedOrRaw(item.caption), 600),
-    description: cleanMediaText(pickRenderedOrRaw(item.description), 800),
+    description: cleanMediaText(pickRenderedOrRaw(item.description), 2000),
     slug: typeof item.slug === "string" ? item.slug : ""
   };
 }
@@ -326,24 +524,43 @@ async function selectFeaturedMedia(topic) {
     return {
       selected: null,
       available: 0,
-      reason: "No usable WordPress media found."
+      unusedAvailable: 0,
+      cycleNumber: 0,
+      trackingEnabled: false,
+      startedNewCycle: false,
+      reason: "No usable WordPress media found.",
     };
   }
 
-  const scored = mediaItems
+  const rotation = await getMediaRotationPool(mediaItems);
+  const candidateMediaItems = rotation.mediaItems.length
+    ? rotation.mediaItems
+    : mediaItems;
+
+  const scored = candidateMediaItems
     .map((media) => ({ media, score: scoreMediaForTopic(media, topic) }))
-    .sort((a, b) => b.score - a.score || String(a.media.id).localeCompare(String(b.media.id)));
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        String(a.media.id).localeCompare(String(b.media.id))
+    );
 
   const best = scored[0];
 
   return {
     selected: best.media,
     available: mediaItems.length,
+    unusedAvailable: rotation.unusedAvailable,
+    usedCount: rotation.usedCount,
+    cycleNumber: rotation.cycleNumber,
+    trackingEnabled: rotation.trackingEnabled,
+    startedNewCycle: rotation.startedNewCycle,
+    rotationError: rotation.rotationError,
     score: best.score,
     reason:
       best.score > 0
-        ? "Matched by topic keywords."
-        : "No strong keyword match; selected first usable approved media."
+        ? "Matched by topic keywords from unused media pool."
+        : "No strong keyword match; selected first unused usable approved media.",
   };
 }
 
@@ -1068,20 +1285,31 @@ module.exports = async function handler(req, res) {
     const mediaResult = await selectFeaturedMedia(topic);
     const media = mediaResult.selected;
 
-    log.selectedMedia = media
-      ? {
-          id: media.id,
-          url: media.url,
-          title: media.title,
-          altText: media.altText,
-          available: mediaResult.available,
-          score: mediaResult.score,
-          reason: mediaResult.reason
-        }
-      : {
-          available: mediaResult.available,
-          reason: mediaResult.reason
-        };
+   log.selectedMedia = media
+  ? {
+      id: media.id,
+      url: media.url,
+      title: media.title,
+      altText: media.altText,
+      available: mediaResult.available,
+      unusedAvailable: mediaResult.unusedAvailable,
+      usedCount: mediaResult.usedCount,
+      cycleNumber: mediaResult.cycleNumber,
+      trackingEnabled: mediaResult.trackingEnabled,
+      startedNewCycle: mediaResult.startedNewCycle,
+      rotationError: mediaResult.rotationError || null,
+      score: mediaResult.score,
+      reason: mediaResult.reason,
+    }
+  : {
+      available: mediaResult.available,
+      unusedAvailable: mediaResult.unusedAvailable,
+      cycleNumber: mediaResult.cycleNumber,
+      trackingEnabled: mediaResult.trackingEnabled,
+      startedNewCycle: mediaResult.startedNewCycle,
+      rotationError: mediaResult.rotationError || null,
+      reason: mediaResult.reason,
+    };
 
     const taxonomies = await resolveTaxonomies(topic);
     log.taxonomies = taxonomies;
@@ -1096,7 +1324,12 @@ module.exports = async function handler(req, res) {
     }
 
     const wp = await createWordPressPost({ seo, topic, dateKey, media, taxonomies });
-
+log.mediaUsage = await markMediaUsed({
+  mediaItems: media ? [media] : [],
+  cycleNumber: mediaResult.cycleNumber,
+  topic,
+  postUrl: wp.link || "",
+});
     log.ok = true;
     log.wordpressStatus = wp.status;
     log.wordpressPostId = wp.id;
